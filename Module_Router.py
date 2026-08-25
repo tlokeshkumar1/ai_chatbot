@@ -81,7 +81,7 @@ MODULE_KEYWORDS = {
     "RPA": [r"\brpa\b", r"\bbot\b", r"\buipath\b", r"\bautomation anywhere\b", r"\bblue prism\b"],
     "UI / UX": [r"\bui\b", r"\bux\b", r"\bfrontend\b", r"\bcss\b", r"\bhtml\b", r"\blayout\b", r"\buser interface\b"],
     "Mendix": [r"\bmendix\b", r"\blow code\b"],
-    "SAP-AI": [r"\bsap ai\b", r"\bai core\b"],
+    "SAP-AI": [r"\bsap ai\b", r"\bai core\b", r"\bJoule\b", r"\sGenAI\b", r"\bagents\b", r"\bagentic ai\b", r"\bgenerative ai\b"],
     "Data Analytics & AI": [r"\bdata analytics\b", r"\bmachine learning\b", r"\bml\b", r"\bai\b", r"\bllm\b"],
     "Support": [r"\bsupport\b", r"\bhelpdesk\b", r"\bgeneral\b"]
 }
