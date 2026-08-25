@@ -5,6 +5,7 @@ import json
 import re
 from ams_api import AMSApi
 from ticket_filter import filter_tickets
+from Module_Router import assign_module, MODULES
 
 st.set_page_config(
     page_title="AMS Ticket Management & Assistant",
@@ -355,9 +356,12 @@ with tab_chat:
                 else:
                     status_lines.append("- ⚡ **Priority**: ❌ *Missing (Please specify: Low, Medium, High, or Critical)*")
 
-                # Description
+                # Description & Module Assignment
                 if draft.get("descriptionofTicket"):
+                    assigned_mod = assign_module(draft["descriptionofTicket"])
+                    draft["module"] = assigned_mod
                     status_lines.append(f"- 📝 **Description**: {draft['descriptionofTicket']} ✅")
+                    status_lines.append(f"- 🏷️ **Assigned Module**: `{assigned_mod}` *(Assigned by AI Agent)* ✅")
                 else:
                     status_lines.append("- 📝 **Description**: ❌ *Missing (Issue details)*")
 
@@ -391,6 +395,8 @@ with tab_chat:
                 type_of_ticket = draft.get("typeofticket", "Incident")
                 reported_by = draft["reportedby"]
                 description = draft["descriptionofTicket"]
+                assigned_module = assign_module(description)
+                draft["module"] = assigned_module
 
                 now_utc = datetime.now(timezone.utc)
                 reported_on_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -401,12 +407,13 @@ with tab_chat:
                     "ams": "AMS",
                     "typeofticket": type_of_ticket,
                     "priority": priority,
+                    "module": assigned_module,
                     "reportedon": reported_on_iso,
                     "reportedontime": reported_on_time_str,
                     "reportedby": reported_by,
                     "descriptionofTicket": description,
                     "screenshort": "N/A",
-                    "remarks": "Created via AI Ticket Assistant",
+                    "remarks": f"Created via AI Ticket Assistant (Module: {assigned_module})",
                     "userId": 0
                 }
 
@@ -473,6 +480,7 @@ with tab_chat:
                         f"- **🏢 Client**: `{client_name}`\n"
                         f"- **⚡ Priority**: `{priority}`\n"
                         f"- **📂 Type**: `{type_of_ticket}`\n"
+                        f"- **🏷️ Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
                         f"- **👤 Reported By**: `{reported_by}`\n"
                         f"- **📝 Description**: {description}\n"
                         f"- **🕒 Timestamp**: `{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
@@ -886,12 +894,11 @@ with tab_create:
                 value="NO",
                 help="Any additional remarks"
             )
-            user_id_val = st.number_input(
-                "User ID",
-                value=0,
-                step=1,
-                min_value=0,
-                help="User ID integer"
+            module_val = st.selectbox(
+                "Module *",
+                options=MODULES,
+                index=MODULES.index("SAP") if "SAP" in MODULES else 0,
+                help="Select ticket module"
             )
 
         description_val = st.text_area(
@@ -910,13 +917,14 @@ with tab_create:
             "ams": ams_val.strip() if ams_val else None,
             "typeofticket": type_of_ticket.strip() if type_of_ticket else None,
             "priority": priority_val.strip() if priority_val else None,
+            "module": module_val.strip() if module_val else None,
             "reportedon": reported_on_iso,
             "reportedontime": reported_on_time_str,
             "reportedby": reported_by.strip() if reported_by else None,
             "descriptionofTicket": description_val.strip() if description_val else None,
             "screenshort": screenshort_val.strip() if screenshort_val else None,
             "remarks": remarks_val.strip() if remarks_val else None,
-            "userId": int(user_id_val)
+            "userId": 0
         }
 
         with st.expander("🔍 Preview JSON Request Payload (TicketCreateRequest)"):
