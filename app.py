@@ -922,7 +922,7 @@ with tab_create:
         with st.expander("🔍 Preview JSON Request Payload (TicketCreateRequest)"):
             st.json(ticket_payload)
 
-        submitted = st.form_submit_button("🚀 Submit Ticket", use_container_width=True, type="primary")
+        submitted = st.form_submit_button("Submit Ticket", use_container_width=True, type="primary")
 
     if submitted:
         if not client_name or not description_val:

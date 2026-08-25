@@ -1,0 +1,46 @@
+RPA
+SAP-FICO
+SAP-SD
+SAP ABAP
+SAP-BASIS
+SAP-PM
+SAP-MM
+SAP-PP
+SAP-DBM
+SAP-SF
+SAP-PS
+SAP-CPI
+SAP-PMO
+AWS
+SAP-Analytics
+SAP-BW
+SAP-Delivery
+SAP-HCM
+SAP-QM
+SAP-PI
+Dot Net Technologies
+SAP
+Infra Cloud
+Freelancer
+SAP-EWM
+SAP EHS
+SAP-SOLUTION MANAGER
+SAP-DMS
+SAP-PPQM
+Support
+SAP-VIM
+Siemens
+SAP-VSS
+Linux Admin
+SAP SAC
+SAP ARIBA
+Mendix
+HRBP
+Inside Sales
+SAP-AI
+SAP-BTP
+Data Analytics & AI
+SAP PPVC
+SAP BTP
+SAP SDM
+UI / UX
