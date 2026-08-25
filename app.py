@@ -407,14 +407,13 @@ with tab_chat:
                     "ams": "AMS",
                     "typeofticket": type_of_ticket,
                     "priority": priority,
-                    "module": assigned_module,
                     "reportedon": reported_on_iso,
                     "reportedontime": reported_on_time_str,
                     "reportedby": reported_by,
                     "descriptionofTicket": description,
                     "screenshort": "N/A",
                     "remarks": f"Created via AI Ticket Assistant (Module: {assigned_module})",
-                    "userId": 0
+                    "module": assigned_module
                 }
 
                 try:
@@ -917,14 +916,13 @@ with tab_create:
             "ams": ams_val.strip() if ams_val else None,
             "typeofticket": type_of_ticket.strip() if type_of_ticket else None,
             "priority": priority_val.strip() if priority_val else None,
-            "module": module_val.strip() if module_val else None,
             "reportedon": reported_on_iso,
             "reportedontime": reported_on_time_str,
             "reportedby": reported_by.strip() if reported_by else None,
             "descriptionofTicket": description_val.strip() if description_val else None,
             "screenshort": screenshort_val.strip() if screenshort_val else None,
             "remarks": remarks_val.strip() if remarks_val else None,
-            "userId": 0
+            "module": module_val.strip() if module_val else None
         }
 
         with st.expander("🔍 Preview JSON Request Payload (TicketCreateRequest)"):
