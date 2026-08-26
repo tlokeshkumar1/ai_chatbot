@@ -3,7 +3,7 @@ import re
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Complete list of valid modules in AMS
 MODULES = [
@@ -167,6 +167,7 @@ def assign_module(description: str) -> str:
     if not description or not str(description).strip():
         return "Support"
 
+    load_dotenv(override=True)
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if api_key and api_key != "your_gemini_api_key":
         agent_res = _classify_with_agent(description.strip(), api_key)

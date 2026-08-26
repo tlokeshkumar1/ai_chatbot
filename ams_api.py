@@ -2,18 +2,102 @@ import os
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class AMSApi:
     def __init__(self, username=None, password=None):
-        self.username = username or os.getenv("AMS_USERNAME", "")
-        self.password = password or os.getenv("AMS_PASSWORD", "")
-        self.auth_url = os.getenv("AMS_AUTH_URL", "http://172.16.32.50/api/Auth/login")
-        self.ticket_url = os.getenv("AMS_TICKET_URL", "http://172.16.32.50/api/Ticket")
-        self.ticket_status_url = os.getenv("AMS_TICKET_STATUS_URL", "http://172.16.32.50/api/Ticket/Status")
-        self.ticket_create_url = os.getenv("AMS_TICKET_CREATE_URL", "http://172.16.32.50/api/Ticket/CreateTicket")
+        self._username = username
+        self._password = password
+        self._auth_url = None
+        self._ticket_url = None
+        self._ticket_status_url = None
+        self._ticket_create_url = None
         self.token = None
+
+    def reload_env(self):
+        """Reload variables from .env file into os.environ."""
+        load_dotenv(override=True)
+
+    @property
+    def username(self):
+        if self._username and self._username != "your_username":
+            return self._username
+        self.reload_env()
+        return (
+            os.getenv("AMS_USERNAME")
+            or os.getenv("AMS_USER")
+            or os.getenv("USERNAME")
+            or ""
+        )
+
+    @username.setter
+    def username(self, value):
+        if self._username != value:
+            self._username = value
+            self.token = None
+
+    @property
+    def password(self):
+        if self._password and self._password != "your_password":
+            return self._password
+        self.reload_env()
+        return (
+            os.getenv("AMS_PASSWORD")
+            or os.getenv("AMS_PASS")
+            or os.getenv("PASSWORD")
+            or ""
+        )
+
+    @password.setter
+    def password(self, value):
+        if self._password != value:
+            self._password = value
+            self.token = None
+
+    @property
+    def auth_url(self):
+        if self._auth_url:
+            return self._auth_url
+        self.reload_env()
+        return os.getenv("AMS_AUTH_URL", "http://172.16.32.50/api/Auth/login")
+
+    @auth_url.setter
+    def auth_url(self, value):
+        self._auth_url = value
+
+    @property
+    def ticket_url(self):
+        if self._ticket_url:
+            return self._ticket_url
+        self.reload_env()
+        return os.getenv("AMS_TICKET_URL", "http://172.16.32.50/api/Ticket")
+
+    @ticket_url.setter
+    def ticket_url(self, value):
+        self._ticket_url = value
+
+    @property
+    def ticket_status_url(self):
+        if self._ticket_status_url:
+            return self._ticket_status_url
+        self.reload_env()
+        return os.getenv("AMS_TICKET_STATUS_URL", "http://172.16.32.50/api/Ticket/Status")
+
+    @ticket_status_url.setter
+    def ticket_status_url(self, value):
+        self._ticket_status_url = value
+
+    @property
+    def ticket_create_url(self):
+        if self._ticket_create_url:
+            return self._ticket_create_url
+        self.reload_env()
+        return os.getenv("AMS_TICKET_CREATE_URL", "http://172.16.32.50/api/Ticket/CreateTicket")
+
+    @ticket_create_url.setter
+    def ticket_create_url(self, value):
+        self._ticket_create_url = value
 
     def authenticate(self, username=None, password=None):
         if username is not None:
@@ -156,19 +240,24 @@ class AMSApi:
         if not self.token:
             self.authenticate()
         
-        # Clone payload and normalize priority if short form was given
+        # Clone payload and normalize priority if short form or variant was given
         payload = dict(ticket_data)
         prio = payload.get("priority")
         if prio:
             prio_clean = str(prio).strip().lower()
-            if prio_clean in ["high", "p2"]:
-                payload["priority"] = "High (Business Impacted)"
-            elif prio_clean in ["critical", "very high", "veryhigh", "p1"]:
+            if "very high" in prio_clean or "critical" in prio_clean or prio_clean in ["p1", "1"]:
                 payload["priority"] = "Very High (Production Impacted)"
-            elif prio_clean in ["medium", "med", "p3"]:
+            elif "high" in prio_clean or prio_clean in ["p2", "2"]:
+                payload["priority"] = "High (Business Impacted)"
+            elif "med" in prio_clean or prio_clean in ["p3", "3"]:
                 payload["priority"] = "Medium"
-            elif prio_clean in ["low", "p4"]:
+            elif "low" in prio_clean or prio_clean in ["p4", "4"]:
                 payload["priority"] = "Low"
+
+        # Client Name cleaning
+        client_name = payload.get("clientName")
+        if client_name:
+            payload["clientName"] = str(client_name).strip()
 
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -190,7 +279,7 @@ class AMSApi:
             headers["Authorization"] = f"Bearer {self.token}"
             response = requests.post(
                 self.ticket_create_url,
-                json=ticket_data,
+                json=payload,
                 headers=headers,
                 timeout=60
             )

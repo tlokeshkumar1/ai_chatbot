@@ -1,11 +1,15 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 import json
 import re
+from dotenv import load_dotenv
 from ams_api import AMSApi
 from ticket_filter import filter_tickets
 from Module_Router import assign_module, MODULES
+
+load_dotenv(override=True)
 
 st.set_page_config(
     page_title="AMS Ticket Management & Assistant",
@@ -25,6 +29,110 @@ def fetch_all_tickets(username, password):
 def fetch_ticket_statuses(username, password):
     api = AMSApi(username=username, password=password)
     return api.get_ticket_status()
+
+
+def submit_draft_ticket(ams_api, draft):
+    """Submits a confirmed ticket draft to AMS API and returns formatted result string."""
+    client_name = draft["clientName"]
+    
+    # Auto-resolve partial client name against registered AMS clients
+    tickets_pool = getattr(st.session_state, "tickets", None)
+    if tickets_pool:
+        known_clients = sorted(list({str(x["clientName"]) for x in tickets_pool if x.get("clientName")}), key=len, reverse=True)
+        for kc in known_clients:
+            if kc.lower() == client_name.lower() or client_name.lower() in kc.lower():
+                client_name = kc
+                break
+
+    priority = draft["priority"]
+    type_of_ticket = draft.get("typeofticket", "Incident")
+    reported_by = draft["reportedby"]
+    description = draft["descriptionofTicket"]
+    assigned_module = draft.get("module") or assign_module(description)
+
+    now_utc = datetime.now(timezone.utc)
+    reported_on_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    reported_on_time_str = datetime.now().time().strftime("%H:%M")
+
+    ticket_payload = {
+        "clientName": client_name,
+        "ams": "AMS",
+        "typeofticket": type_of_ticket,
+        "priority": priority,
+        "reportedon": reported_on_iso,
+        "reportedontime": reported_on_time_str,
+        "reportedby": reported_by,
+        "descriptionofTicket": description,
+        "screenshort": "N/A",
+        "remarks": f"Created via AI Ticket Assistant (Module: {assigned_module})",
+        "module": assigned_module
+    }
+
+    create_res = ams_api.create_ticket(ticket_payload)
+
+    new_ticket_no = None
+    new_txn_id = None
+
+    if isinstance(create_res, dict):
+        new_ticket_no = create_res.get("ticketNo") or create_res.get("ticketNumber") or create_res.get("TicketNo")
+        new_txn_id = create_res.get("txnId") or create_res.get("transactionId") or create_res.get("TxnId")
+        if not new_ticket_no and isinstance(create_res.get("data"), dict):
+            new_ticket_no = create_res["data"].get("ticketNo") or create_res["data"].get("ticketNumber")
+            new_txn_id = create_res["data"].get("txnId") or create_res["data"].get("transactionId")
+        elif not new_ticket_no and isinstance(create_res.get("result"), dict):
+            new_ticket_no = create_res["result"].get("ticketNo") or create_res["result"].get("ticketNumber")
+            new_txn_id = create_res["result"].get("txnId") or create_res["result"].get("transactionId")
+
+    try:
+        fetch_all_tickets.clear()
+        fetch_ticket_statuses.clear()
+        fresh_tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+        fresh_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
+        st.session_state.tickets = fresh_tickets
+        st.session_state.ticket_statuses = fresh_statuses
+
+        if not new_ticket_no or not new_txn_id:
+            candidates = []
+            if fresh_statuses:
+                candidates.extend([
+                    x for x in fresh_statuses
+                    if str(x.get("clientName", "")).lower() == client_name.lower()
+                    or str(x.get("remarks", "")).lower() in ["created via ai ticket assistant", "no"]
+                ])
+            if fresh_tickets:
+                candidates.extend([
+                    x for x in fresh_tickets
+                    if str(x.get("clientName", "")).lower() == client_name.lower()
+                ])
+            if candidates:
+                candidates.sort(key=lambda item: int(item.get("txnId") or 0), reverse=True)
+                newest = candidates[0]
+                new_ticket_no = new_ticket_no or newest.get("ticketNo")
+                new_txn_id = new_txn_id or newest.get("txnId")
+    except Exception:
+        pass
+
+    ticket_no_display = f"`{new_ticket_no}`" if new_ticket_no else "*Generated in AMS*"
+    txn_id_display = f"`{new_txn_id}`" if new_txn_id else "*Generated in AMS*"
+
+    answer = (
+        f"### 🎉 Ticket Created Successfully!\n\n"
+        f"The ticket has been created and submitted to AMS (`POST /api/Ticket/CreateTicket`).\n\n"
+        f"- **🎫 Ticket Number**: {ticket_no_display}\n"
+        f"- **🔢 Transaction ID**: {txn_id_display}\n"
+        f"- **🏢 Client**: `{client_name}`\n"
+        f"- **⚡ Priority**: `{priority}`\n"
+        f"- **📂 Type**: `{type_of_ticket}`\n"
+        f"- **🏷️ Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
+        f"- **👤 Reported By**: `{reported_by}`\n"
+        f"- **📝 Description**: {description}\n"
+        f"- **🕒 Timestamp**: `{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
+    )
+    if isinstance(create_res, dict) and create_res.get("message"):
+        answer += f"> **API Response**: {create_res.get('message')}\n\n"
+
+    answer += "🔄 *Ticket caches have been automatically refreshed.*"
+    return answer
 
 # ---------------------------------------------------------
 # Initialize API & Session State
@@ -52,16 +160,22 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ AMS Configuration")
     
-    username_val = ams_api.username if ams_api.username != "your_username" else ""
-    password_val = ams_api.password if ams_api.password != "your_password" else ""
+    load_dotenv(override=True)
+    env_user = os.getenv("AMS_USERNAME") or os.getenv("AMS_USER") or os.getenv("USERNAME") or ""
+    
+    username_val = ams_api.username
+    password_val = ams_api.password
     
     input_username = st.text_input("Username", value=username_val, placeholder="Enter AMS Username")
     input_password = st.text_input("Password", value=password_val, type="password", placeholder="Enter AMS Password")
     
-    if input_username:
-        ams_api.username = input_username
-    if input_password:
-        ams_api.password = input_password
+    ams_api.username = input_username
+    ams_api.password = input_password
+
+    if env_user:
+        st.caption(f"💡 Default username loaded from `.env`: `{env_user}`")
+    else:
+        st.caption("ℹ️ You can set `AMS_USERNAME` and `AMS_PASSWORD` in `.env` for auto-login.")
 
     st.divider()
     st.subheader("⚡ Quick Actions")
@@ -158,6 +272,33 @@ with tab_chat:
                 else:
                     st.dataframe(df, use_container_width=True, hide_index=True)
 
+    # Interactive draft confirmation controls if a complete draft is pending confirmation
+    if st.session_state.pending_ticket_draft and st.session_state.pending_ticket_draft.get("ready_for_confirmation"):
+        draft_info = st.session_state.pending_ticket_draft
+        with st.container(border=True):
+            st.markdown(f"📋 **Draft Ready for Confirmation**: Client: `{draft_info.get('clientName')}` | Priority: `{draft_info.get('priority')}` | Module: `{draft_info.get('module')}`")
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                if st.button("✅ Confirm & Create Ticket", type="primary", use_container_width=True, key="confirm_ticket_btn"):
+                    st.session_state.messages.append({"role": "user", "content": "✅ Confirmed ticket creation"})
+                    try:
+                        with st.spinner(f"Submitting ticket for '{draft_info.get('clientName')}' to AMS API..."):
+                            res_msg = submit_draft_ticket(ams_api, draft_info)
+                        st.session_state.messages.append({"role": "assistant", "content": res_msg, "data": None})
+                    except Exception as ex:
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"### ❌ Ticket Creation Failed\n\nThe AMS API returned an error:\n> `{ex}`\n\nEnsure client name matches a valid registered client in AMS.",
+                            "data": None
+                        })
+                    st.session_state.pending_ticket_draft = None
+                    st.rerun()
+            with col_c2:
+                if st.button("❌ Cancel Draft", use_container_width=True, key="cancel_ticket_btn"):
+                    st.session_state.pending_ticket_draft = None
+                    st.session_state.messages.append({"role": "assistant", "content": "🧹 Ticket draft cancelled.", "data": None})
+                    st.rerun()
+
     user_question = st.chat_input("Ask about tickets (e.g. 'Show P2 tickets') or create one (e.g. 'create ticket for Karamtara: Login issue, priority High')...")
 
     if user_question:
@@ -244,87 +385,157 @@ with tab_chat:
             # Initialize or carry over existing draft
             draft = dict(st.session_state.pending_ticket_draft or {})
 
-            # 1. Priority detection & extraction
-            priority_match = re.search(r'\bpriority\s*[:=]\s*([^,\n;]+)', user_question, re.IGNORECASE)
-            if priority_match:
-                p_val = priority_match.group(1).strip()
-                # If priority value is another parameter keyword, it was left empty
-                if re.search(r'^(?:issue|desc|description|client|by|reported|type)\s*[:=]', p_val, re.IGNORECASE):
-                    draft["priority"] = None
-                else:
-                    p_lower = p_val.lower()
-                    if re.search(r'\b(very high|critical|p1|production impacted)\b', p_lower):
+            # 0. Explicit Edit Command Detection (e.g. "edit priority to medium", "change client to ATG")
+            is_edit_command = False
+            edit_match = re.search(
+                r'\b(?:edit|change|update|set|modify)\s+(priority|client|client\s+name|description|issue|desc|reported\s*by|reporter|type|ticket\s+type)\s*(?:to|is|=|:)?\s*(.+)',
+                user_question,
+                re.IGNORECASE
+            )
+            if edit_match:
+                is_edit_command = True
+                field_target = edit_match.group(1).lower().strip()
+                new_val = edit_match.group(2).strip()
+
+                if "priority" in field_target:
+                    if re.search(r'\b(very high|critical|p1|production impacted)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "Very High (Production Impacted)"
-                    elif re.search(r'\b(high|p2|business impacted)\b', p_lower):
+                    elif re.search(r'\b(high|p2|business impacted)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "High (Business Impacted)"
-                    elif re.search(r'\b(medium|med|p3)\b', p_lower):
+                    elif re.search(r'\b(medium|med|p3)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "Medium"
-                    elif re.search(r'\b(low|p4)\b', p_lower):
+                    elif re.search(r'\b(low|p4)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "Low"
                     else:
-                        draft["priority"] = None
-            elif not draft.get("priority"):
-                if re.search(r'\b(very high|critical|p1|production impacted)\b', question):
-                    draft["priority"] = "Very High (Production Impacted)"
-                elif re.search(r'\b(high|p2|business impacted)\b', question):
-                    draft["priority"] = "High (Business Impacted)"
-                elif re.search(r'\b(medium|med|p3)\b', question):
-                    draft["priority"] = "Medium"
-                elif re.search(r'\b(low|p4)\b', question):
-                    draft["priority"] = "Low"
+                        draft["priority"] = new_val.capitalize()
 
-            # 2. Type of ticket detection
-            for t_type in ["Service Request", "Change Request", "S PO", "Incident"]:
-                if re.search(r'\b' + re.escape(t_type.lower()) + r'\b', question):
-                    draft["typeofticket"] = t_type
-                    break
-            if not draft.get("typeofticket"):
-                draft["typeofticket"] = "Incident"
+                elif "client" in field_target:
+                    draft["clientName"] = new_val.strip(" .")
 
-            # 3. Client Name extraction
-            client_match = re.search(r'(?:client(?:\s*name)?|organization)\s*[:=]\s*([^,\n;]+)', user_question, re.IGNORECASE)
-            if client_match:
-                c_val = client_match.group(1).strip()
-                if not re.search(r'^(?:priority|type|issue|desc|description|by|reported)\s*[:=]', c_val, re.IGNORECASE):
-                    draft["clientName"] = c_val
-            elif not draft.get("clientName"):
-                for item in pool:
-                    c = item.get("clientName")
-                    if c and len(str(c)) > 3 and str(c).lower() in question:
-                        draft["clientName"] = str(c)
+                elif any(k in field_target for k in ["description", "issue", "desc"]):
+                    draft["descriptionofTicket"] = new_val.strip(" .")
+
+                elif any(k in field_target for k in ["reported", "reporter", "by"]):
+                    draft["reportedby"] = new_val.strip(" .")
+
+                elif "type" in field_target:
+                    draft["typeofticket"] = new_val.strip(" .")
+
+            if not is_edit_command:
+                # 1. Priority detection & extraction
+                priority_match = re.search(r'\bpriority\s*(?:is|:=|=|:)?\s*([^,\.\n;]+)', user_question, re.IGNORECASE)
+                if priority_match:
+                    p_val = priority_match.group(1).strip()
+                    if not re.search(r'^(?:issue|desc|description|client|by|reported|type)\b', p_val, re.IGNORECASE):
+                        p_lower = p_val.lower()
+                        if re.search(r'\b(very high|critical|p1|production impacted)\b', p_lower):
+                            draft["priority"] = "Very High (Production Impacted)"
+                        elif re.search(r'\b(high|p2|business impacted)\b', p_lower):
+                            draft["priority"] = "High (Business Impacted)"
+                        elif re.search(r'\b(medium|med|p3)\b', p_lower):
+                            draft["priority"] = "Medium"
+                        elif re.search(r'\b(low|p4)\b', p_lower):
+                            draft["priority"] = "Low"
+
+                if not draft.get("priority"):
+                    if re.search(r'\b(very high|critical|p1|production impacted)\b', question):
+                        draft["priority"] = "Very High (Production Impacted)"
+                    elif re.search(r'\b(high|p2|business impacted)\b', question):
+                        draft["priority"] = "High (Business Impacted)"
+                    elif re.search(r'\b(medium|med|p3)\b', question):
+                        draft["priority"] = "Medium"
+                    elif re.search(r'\b(low|p4)\b', question):
+                        draft["priority"] = "Low"
+
+                # 2. Type of ticket detection
+                for t_type in ["Service Request", "Change Request", "S PO", "Incident"]:
+                    if re.search(r'\b' + re.escape(t_type.lower()) + r'\b', question):
+                        draft["typeofticket"] = t_type
                         break
+                if not draft.get("typeofticket"):
+                    draft["typeofticket"] = "Incident"
 
-            if not draft.get("clientName"):
-                for_match = re.search(r'\bfor\s+(?:client\s+)?([A-Za-z0-9\s&.]+?)(?:\s*[:,]|\s+with|\s+priority|\s+issue|\s+desc|\s+by|$)', user_question, re.IGNORECASE)
-                if for_match:
-                    candidate = for_match.group(1).strip()
-                    if candidate.lower() not in ["ticket", "a ticket", "the ticket", "ams", "sap", "incident", "issue", "me", "us", "help"]:
-                        draft["clientName"] = candidate
+                # 3. Client Name extraction
+                client_match = re.search(r'(?:client(?:\s*name)?|organization)\s*(?:is|:=|=|:)\s*([^,\.\n;]+)', user_question, re.IGNORECASE)
+                if client_match:
+                    c_val = client_match.group(1).strip()
+                    if not re.search(r'^(?:priority|type|issue|desc|description|by|reported)\b', c_val, re.IGNORECASE):
+                        draft["clientName"] = c_val
 
-            # 4. Reported By extraction
-            by_match = re.search(r'(?:reported\s*by|reporter|by)\s*[:=]\s*([^,\n;]+)', user_question, re.IGNORECASE)
-            if by_match:
-                by_val = by_match.group(1).strip()
-                if not re.search(r'^(?:client|priority|type|issue|desc|description)\s*[:=]', by_val, re.IGNORECASE):
-                    draft["reportedby"] = by_val
-            elif not draft.get("reportedby") and ams_api.username and ams_api.username != "your_username":
-                draft["reportedby"] = ams_api.username
+                # Direct lookup in pool client names if not extracted yet
+                if not draft.get("clientName"):
+                    known_clients = sorted(list({str(x["clientName"]) for x in pool if x.get("clientName")}), key=len, reverse=True) if pool else []
+                    default_clients = ["Karamtara Engineering Pvt Ltd", "AAB", "ATG", "ACSEN HyVeg Pvt Ltd", "AJAX Engineering Pvt Ltd"]
+                    for dc in default_clients:
+                        if dc not in known_clients:
+                            known_clients.append(dc)
+                    known_clients.sort(key=len, reverse=True)
 
-            # 5. Description extraction
-            desc_match = re.search(r'(?:description|desc|issue|problem|summary)\s*[:=]\s*(.+)', user_question, re.IGNORECASE | re.DOTALL)
-            if desc_match:
-                d_val = desc_match.group(1).strip()
-                d_val = re.split(r',\s*(?:priority|reported\s*by|by|type|screenshort|remarks)\s*[:=]', d_val, flags=re.IGNORECASE)[0].strip()
-                d_val = re.sub(r',?\s*priority\s+(?:p[1-4]|very high|high|medium|low|critical)\b.*$', '', d_val, flags=re.IGNORECASE).strip()
-                if d_val:
-                    draft["descriptionofTicket"] = d_val
-            elif not draft.get("descriptionofTicket"):
-                colon_parts = user_question.split(":", 1)
-                if len(colon_parts) > 1 and not re.search(r'^(client|priority|type|by|reported by)', colon_parts[0].strip(), re.IGNORECASE):
-                    val = colon_parts[1].strip()
-                    val = re.sub(r',?\s*priority\s+(?:p[1-4]|very high|high|medium|low|critical)\b.*$', '', val, flags=re.IGNORECASE).strip()
-                    if val:
-                        draft["descriptionofTicket"] = val
+                    for c_name in known_clients:
+                        if len(c_name) <= 4:
+                            if re.search(r'\b' + re.escape(c_name) + r'\b', user_question, re.IGNORECASE):
+                                draft["clientName"] = c_name
+                                break
+                        else:
+                            if c_name.lower() in question:
+                                draft["clientName"] = c_name
+                                break
+
+                if not draft.get("clientName"):
+                    for_match = re.search(r'\bfor\s+(?:client\s+)?([A-Za-z0-9\s&.]+?)(?:\s*[:,]|\s+with|\s+priority|\s+issue|\s+desc|\s+by|$|\.)', user_question, re.IGNORECASE)
+                    if for_match:
+                        candidate = for_match.group(1).strip()
+                        if candidate.lower() not in ["ticket", "a ticket", "the ticket", "ams", "sap", "incident", "issue", "me", "us", "help"]:
+                            draft["clientName"] = candidate
+
+                # 4. Reported By extraction
+                by_match = re.search(r'(?:reported\s*by|reporter|by)\s*(?:is|:=|=|:)?\s*([A-Za-z0-9\s&_.]+?)(?:\.|\,|\;|\b(?:client|priority|type|issue|desc|description)\b|$)', user_question, re.IGNORECASE)
+                if by_match:
+                    by_val = by_match.group(1).strip()
+                    if not re.search(r'^(?:client|priority|type|issue|desc|description)\b', by_val, re.IGNORECASE):
+                        draft["reportedby"] = by_val
+
+                if not draft.get("reportedby") and ams_api.username and ams_api.username != "your_username":
+                    draft["reportedby"] = ams_api.username
+
+                # 5. Description extraction
+                desc_match = re.search(r'(?:description|desc|issue|problem|summary)\s*(?:is|:=|=|:)\s*(.+)', user_question, re.IGNORECASE | re.DOTALL)
+                if desc_match:
+                    d_val = desc_match.group(1).strip()
+                    d_val = re.split(r'[\.,]\s*(?:priority|reported\s*by|by|type|client|screenshort|remarks)\b', d_val, flags=re.IGNORECASE)[0].strip()
+                    d_val = re.sub(r',?\s*priority\s+(?:p[1-4]|very high|high|medium|low|critical)\b.*$', '', d_val, flags=re.IGNORECASE).strip()
+                    if d_val:
+                        draft["descriptionofTicket"] = d_val
+
+                if not draft.get("descriptionofTicket"):
+                    phrase_match = re.search(r'\b(?:i\s+have|i\s+am\s+having|having|facing|got|there\s+is|there\'s|with|due\s+to)\s+(.+)', user_question, re.IGNORECASE)
+                    if phrase_match:
+                        p_text = phrase_match.group(1).strip()
+                        p_text = re.split(r'\.|\,|\;\s*(?:please\s+)?(?:create|raise|open|log)\s+(?:a\s+)?ticket', p_text, flags=re.IGNORECASE)[0].strip()
+                        p_text = re.sub(r'\s+(?:for\s+client|priority|module|reported\s+by).*$', '', p_text, flags=re.IGNORECASE).strip()
+                        if p_text and len(p_text) > 3:
+                            draft["descriptionofTicket"] = p_text
+
+                if not draft.get("descriptionofTicket"):
+                    colon_parts = user_question.split(":", 1)
+                    if len(colon_parts) > 1 and not re.search(r'^(client|priority|type|by|reported by)', colon_parts[0].strip(), re.IGNORECASE):
+                        val = colon_parts[1].strip()
+                        val = re.sub(r',?\s*priority\s+(?:p[1-4]|very high|high|medium|low|critical)\b.*$', '', val, flags=re.IGNORECASE).strip()
+                        if val:
+                            draft["descriptionofTicket"] = val
+
+                if not draft.get("descriptionofTicket") and has_active_draft:
+                    clean_text = user_question
+                    if draft.get("clientName"):
+                        clean_text = re.sub(r'client\s*(?:name)?\s*(?:is|:=|=|:)?\s*' + re.escape(draft["clientName"]), '', clean_text, flags=re.IGNORECASE)
+                        clean_text = re.sub(r'\b' + re.escape(draft["clientName"]) + r'\b', '', clean_text, flags=re.IGNORECASE)
+                    if draft.get("reportedby"):
+                        clean_text = re.sub(r'reported\s*by\s*(?:is|:=|=|:)?\s*' + re.escape(draft["reportedby"]), '', clean_text, flags=re.IGNORECASE)
+                    clean_text = re.sub(r'priority\s*(?:is|:=|=|:)?\s*(?:very high|high|medium|low|critical|p[1-4])', '', clean_text, flags=re.IGNORECASE)
+                    clean_text = re.sub(r'\b(create ticket|raise ticket|new ticket|ticket|incident|issue|priority|client|reported by)\b', '', clean_text, flags=re.IGNORECASE)
+                    clean_text = clean_text.strip(" .,;:-")
+                    if len(clean_text) > 3:
+                        draft["descriptionofTicket"] = clean_text
 
             # Check missing required fields
             missing_fields = []
@@ -389,7 +600,7 @@ with tab_chat:
                 )
 
             else:
-                # All fields are present -> Create Ticket!
+                # All required fields are present
                 client_name = draft["clientName"]
                 priority = draft["priority"]
                 type_of_ticket = draft.get("typeofticket", "Incident")
@@ -398,105 +609,48 @@ with tab_chat:
                 assigned_module = assign_module(description)
                 draft["module"] = assigned_module
 
-                now_utc = datetime.now(timezone.utc)
-                reported_on_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-                reported_on_time_str = datetime.now().time().strftime("%H:%M")
+                # Check if user is confirming a draft that is ready for confirmation
+                confirm_keywords = ["confirm", "yes", "create", "proceed", "submit", "ok", "create ticket", "go ahead", "do it", "confirm creation", "create ticket now"]
+                is_confirm = draft.get("ready_for_confirmation") and (question in confirm_keywords or question.startswith("confirm") or question.startswith("yes"))
 
-                ticket_payload = {
-                    "clientName": client_name,
-                    "ams": "AMS",
-                    "typeofticket": type_of_ticket,
-                    "priority": priority,
-                    "reportedon": reported_on_iso,
-                    "reportedontime": reported_on_time_str,
-                    "reportedby": reported_by,
-                    "descriptionofTicket": description,
-                    "screenshort": "N/A",
-                    "remarks": f"Created via AI Ticket Assistant (Module: {assigned_module})",
-                    "module": assigned_module
-                }
-
-                try:
-                    with st.spinner(f"Submitting ticket for '{client_name}' to AMS API..."):
-                        create_res = ams_api.create_ticket(ticket_payload)
-
-                    # Clear draft upon successful creation
-                    st.session_state.pending_ticket_draft = None
-
-                    # Invalidate caches and auto-fetch fresh records
-                    new_ticket_no = None
-                    new_txn_id = None
-
-                    # Check if response payload contains ticketNo or txnId directly
-                    if isinstance(create_res, dict):
-                        new_ticket_no = create_res.get("ticketNo") or create_res.get("ticketNumber") or create_res.get("TicketNo")
-                        new_txn_id = create_res.get("txnId") or create_res.get("transactionId") or create_res.get("TxnId")
-                        if not new_ticket_no and isinstance(create_res.get("data"), dict):
-                            new_ticket_no = create_res["data"].get("ticketNo") or create_res["data"].get("ticketNumber")
-                            new_txn_id = create_res["data"].get("txnId") or create_res["data"].get("transactionId")
-                        elif not new_ticket_no and isinstance(create_res.get("result"), dict):
-                            new_ticket_no = create_res["result"].get("ticketNo") or create_res["result"].get("ticketNumber")
-                            new_txn_id = create_res["result"].get("txnId") or create_res["result"].get("transactionId")
-
+                if is_confirm:
                     try:
-                        fetch_all_tickets.clear()
-                        fetch_ticket_statuses.clear()
-                        fresh_tickets = fetch_all_tickets(ams_api.username, ams_api.password)
-                        fresh_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
-                        st.session_state.tickets = fresh_tickets
-                        st.session_state.ticket_statuses = fresh_statuses
-
-                        # Look up ticketNo and txnId from latest records if not in direct response
-                        if not new_ticket_no or not new_txn_id:
-                            candidates = []
-                            if fresh_statuses:
-                                candidates.extend([
-                                    x for x in fresh_statuses
-                                    if str(x.get("clientName", "")).lower() == client_name.lower()
-                                    or str(x.get("remarks", "")).lower() in ["created via ai ticket assistant", "no"]
-                                ])
-                            if fresh_tickets:
-                                candidates.extend([
-                                    x for x in fresh_tickets
-                                    if str(x.get("clientName", "")).lower() == client_name.lower()
-                                ])
-                            if candidates:
-                                candidates.sort(key=lambda item: int(item.get("txnId") or 0), reverse=True)
-                                newest = candidates[0]
-                                new_ticket_no = new_ticket_no or newest.get("ticketNo")
-                                new_txn_id = new_txn_id or newest.get("txnId")
-                    except Exception:
-                        pass
-
-                    ticket_no_display = f"`{new_ticket_no}`" if new_ticket_no else "*Generated in AMS*"
-                    txn_id_display = f"`{new_txn_id}`" if new_txn_id else "*Generated in AMS*"
+                        with st.spinner(f"Submitting ticket for '{client_name}' to AMS API..."):
+                            answer = submit_draft_ticket(ams_api, draft)
+                        st.session_state.pending_ticket_draft = None
+                    except Exception as ex:
+                        answer = (
+                            f"### ❌ Ticket Creation Failed\n\n"
+                            f"The AMS API returned an error:\n"
+                            f"> `{ex}`\n\n"
+                            f"**Troubleshooting Tips**:\n"
+                            f"- Ensure the client name matches a valid registered client organization.\n"
+                            f"- Check your credentials in the sidebar."
+                        )
+                else:
+                    # Present complete draft preview and ask for confirmation
+                    draft["ready_for_confirmation"] = True
+                    st.session_state.pending_ticket_draft = draft
 
                     answer = (
-                        f"### 🎉 Ticket Created Successfully!\n\n"
-                        f"The ticket has been created and submitted to AMS (`POST /api/Ticket/CreateTicket`).\n\n"
-                        f"- **🎫 Ticket Number**: {ticket_no_display}\n"
-                        f"- **🔢 Transaction ID**: {txn_id_display}\n"
-                        f"- **🏢 Client**: `{client_name}`\n"
-                        f"- **⚡ Priority**: `{priority}`\n"
-                        f"- **📂 Type**: `{type_of_ticket}`\n"
-                        f"- **🏷️ Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
-                        f"- **👤 Reported By**: `{reported_by}`\n"
-                        f"- **📝 Description**: {description}\n"
-                        f"- **🕒 Timestamp**: `{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
-                    )
-                    if isinstance(create_res, dict) and create_res.get("message"):
-                        answer += f"> **API Response**: {create_res.get('message')}\n\n"
-
-                    answer += "🔄 *Ticket caches have been automatically refreshed.*"
-
-                except Exception as ex:
-                    answer = (
-                        f"### ❌ Ticket Creation Failed\n\n"
-                        f"The AMS API returned an error:\n"
-                        f"> `{ex}`\n\n"
-                        f"**Troubleshooting Tips**:\n"
-                        f"- Ensure the client name matches a valid registered client organization.\n"
-                        f"- Check your credentials in the sidebar."
+                        "### 📝 Ticket Draft Preview (Pending Confirmation)\n\n"
+                        "All ticket details have been gathered! Please review below before final submission to AMS:\n\n"
+                        f"- 🏢 **Client Name**: `{client_name}`\n"
+                        f"- ⚡ **Priority**: `{priority}`\n"
+                        f"- 📂 **Ticket Type**: `{type_of_ticket}`\n"
+                        f"- 🏷️ **Assigned Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
+                        f"- 👤 **Reported By**: `{reported_by}`\n"
+                        f"- 📝 **Description**: {description}\n\n"
+                        "--- \n"
+                        "#### 💡 Want to edit any field before submitting?\n"
+                        "You can reply with edit commands like:\n"
+                        "- `edit priority to High`\n"
+                        "- `change client to ATG`\n"
+                        "- `change description to RPA bot process stopped`\n"
+                        "- `change reported by to Mani`\n\n"
+                        "#### ❓ Ready to create this ticket in AMS?\n"
+                        "Click **`✅ Confirm & Create Ticket`** above or reply **`confirm`** / **`yes`** to create this ticket.\n"
+                        "*(Reply `cancel` to discard this draft)*"
                     )
 
             filtered = None
