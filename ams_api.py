@@ -6,8 +6,13 @@ load_dotenv(override=True)
 
 
 class AMSApi:
+<<<<<<< HEAD
     def __init__(self, email=None, password=None):
         self._email = email
+=======
+    def __init__(self, username=None, password=None):
+        self._username = username
+>>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
         self._password = password
         self._auth_url = None
         self._ticket_url = None
@@ -21,6 +26,7 @@ class AMSApi:
         load_dotenv(override=True)
 
     @property
+<<<<<<< HEAD
     def email(self):
         if self._email and self._email != "your_email":
             return self._email
@@ -35,6 +41,23 @@ class AMSApi:
     def email(self, value):
         if self._email != value:
             self._email = value
+=======
+    def username(self):
+        if self._username and self._username != "your_username":
+            return self._username
+        self.reload_env()
+        return (
+            os.getenv("AMS_USERNAME")
+            or os.getenv("AMS_USER")
+            or os.getenv("USERNAME")
+            or ""
+        )
+
+    @username.setter
+    def username(self, value):
+        if self._username != value:
+            self._username = value
+>>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
             self.token = None
 
     @property
@@ -99,9 +122,15 @@ class AMSApi:
     def ticket_create_url(self, value):
         self._ticket_create_url = value
 
+<<<<<<< HEAD
     def authenticate(self, email=None, password=None):
         if email is not None:
             self.email = email
+=======
+    def authenticate(self, username=None, password=None):
+        if username is not None:
+            self.username = username
+>>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
         if password is not None:
             self.password = password
 
