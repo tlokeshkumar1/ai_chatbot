@@ -11,8 +11,6 @@ from Module_Router import assign_group, GROUPS, assign_module, MODULES
 
 load_dotenv(override=True)
 
-load_dotenv(override=True)
-
 st.set_page_config(
     page_title="AMS Ticket Management & Assistant",
     page_icon="🎫",
@@ -50,11 +48,7 @@ def submit_draft_ticket(ams_api, draft):
     type_of_ticket = draft.get("typeofticket", "Incident")
     reported_by = draft["reportedby"]
     description = draft["descriptionofTicket"]
-<<<<<<< HEAD
     assigned_group = draft.get("assigntogroup") or draft.get("module") or assign_group(description)
-=======
-    assigned_module = draft.get("module") or assign_module(description)
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
 
     now_utc = datetime.now(timezone.utc)
     reported_on_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -70,13 +64,8 @@ def submit_draft_ticket(ams_api, draft):
         "reportedby": reported_by,
         "descriptionofTicket": description,
         "screenshort": "N/A",
-<<<<<<< HEAD
         "remarks": f"Created via AI Ticket Assistant (Assign To Group: {assigned_group})",
         "assigntogroup": assigned_group
-=======
-        "remarks": f"Created via AI Ticket Assistant (Module: {assigned_module})",
-        "module": assigned_module
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
     }
 
     create_res = ams_api.create_ticket(ticket_payload)
@@ -85,7 +74,6 @@ def submit_draft_ticket(ams_api, draft):
     new_txn_id = None
 
     if isinstance(create_res, dict):
-<<<<<<< HEAD
         new_ticket_no = create_res.get("ticketId") or create_res.get("ticketNo") or create_res.get("ticketNumber") or create_res.get("TicketNo")
         new_txn_id = create_res.get("txnId") or create_res.get("transactionId") or create_res.get("TxnId")
         if not new_ticket_no and isinstance(create_res.get("data"), dict):
@@ -93,27 +81,13 @@ def submit_draft_ticket(ams_api, draft):
             new_txn_id = create_res["data"].get("txnId") or create_res["data"].get("transactionId")
         elif not new_ticket_no and isinstance(create_res.get("result"), dict):
             new_ticket_no = create_res["result"].get("ticketId") or create_res["result"].get("ticketNo") or create_res["result"].get("ticketNumber")
-=======
-        new_ticket_no = create_res.get("ticketNo") or create_res.get("ticketNumber") or create_res.get("TicketNo")
-        new_txn_id = create_res.get("txnId") or create_res.get("transactionId") or create_res.get("TxnId")
-        if not new_ticket_no and isinstance(create_res.get("data"), dict):
-            new_ticket_no = create_res["data"].get("ticketNo") or create_res["data"].get("ticketNumber")
-            new_txn_id = create_res["data"].get("txnId") or create_res["data"].get("transactionId")
-        elif not new_ticket_no and isinstance(create_res.get("result"), dict):
-            new_ticket_no = create_res["result"].get("ticketNo") or create_res["result"].get("ticketNumber")
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
             new_txn_id = create_res["result"].get("txnId") or create_res["result"].get("transactionId")
 
     try:
         fetch_all_tickets.clear()
         fetch_ticket_statuses.clear()
-<<<<<<< HEAD
         fresh_tickets = fetch_all_tickets(ams_api.email, ams_api.password)
         fresh_statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
-=======
-        fresh_tickets = fetch_all_tickets(ams_api.username, ams_api.password)
-        fresh_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
         st.session_state.tickets = fresh_tickets
         st.session_state.ticket_statuses = fresh_statuses
 
@@ -133,11 +107,7 @@ def submit_draft_ticket(ams_api, draft):
             if candidates:
                 candidates.sort(key=lambda item: int(item.get("txnId") or 0), reverse=True)
                 newest = candidates[0]
-<<<<<<< HEAD
                 new_ticket_no = new_ticket_no or newest.get("ticketId") or newest.get("ticketNo")
-=======
-                new_ticket_no = new_ticket_no or newest.get("ticketNo")
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
                 new_txn_id = new_txn_id or newest.get("txnId")
     except Exception:
         pass
@@ -148,20 +118,12 @@ def submit_draft_ticket(ams_api, draft):
     answer = (
         f"### 🎉 Ticket Created Successfully!\n\n"
         f"The ticket has been created and submitted to AMS (`POST /api/Ticket/CreateTicket`).\n\n"
-<<<<<<< HEAD
         f"- **🎫 Ticket ID / Number**: {ticket_no_display}\n"
-=======
-        f"- **🎫 Ticket Number**: {ticket_no_display}\n"
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
         f"- **🔢 Transaction ID**: {txn_id_display}\n"
         f"- **🏢 Client**: `{client_name}`\n"
         f"- **⚡ Priority**: `{priority}`\n"
         f"- **📂 Type**: `{type_of_ticket}`\n"
-<<<<<<< HEAD
         f"- **🏷️ Assign To Group**: `{assigned_group}` *(Assigned by AI Agent)*\n"
-=======
-        f"- **🏷️ Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
         f"- **👤 Reported By**: `{reported_by}`\n"
         f"- **📝 Description**: {description}\n"
         f"- **🕒 Timestamp**: `{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
@@ -199,14 +161,7 @@ with st.sidebar:
     st.header("⚙️ AMS Configuration")
     
     load_dotenv(override=True)
-<<<<<<< HEAD
     env_email = os.getenv("AMS_EMAIL") or os.getenv("EMAIL") or ""
-=======
-    env_user = os.getenv("AMS_USERNAME") or os.getenv("AMS_USER") or os.getenv("USERNAME") or ""
-    
-    username_val = ams_api.username
-    password_val = ams_api.password
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
     
     email_val = ams_api.email
     password_val = ams_api.password
@@ -214,7 +169,6 @@ with st.sidebar:
     input_email = st.text_input("Email", value=email_val, placeholder="Enter AMS Email")
     input_password = st.text_input("Password", value=password_val, type="password", placeholder="Enter AMS Password")
     
-<<<<<<< HEAD
     ams_api.email = input_email
     ams_api.password = input_password
 
@@ -222,15 +176,6 @@ with st.sidebar:
         st.caption(f"💡 Default email loaded from `.env`: `{env_email}`")
     else:
         st.caption("ℹ️ You can set `AMS_EMAIL` and `AMS_PASSWORD` in `.env` for auto-login.")
-=======
-    ams_api.username = input_username
-    ams_api.password = input_password
-
-    if env_user:
-        st.caption(f"💡 Default username loaded from `.env`: `{env_user}`")
-    else:
-        st.caption("ℹ️ You can set `AMS_USERNAME` and `AMS_PASSWORD` in `.env` for auto-login.")
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
 
     st.divider()
     st.subheader("⚡ Quick Actions")
@@ -331,11 +276,7 @@ with tab_chat:
     if st.session_state.pending_ticket_draft and st.session_state.pending_ticket_draft.get("ready_for_confirmation"):
         draft_info = st.session_state.pending_ticket_draft
         with st.container(border=True):
-<<<<<<< HEAD
             st.markdown(f"📋 **Draft Ready for Confirmation**: Client: `{draft_info.get('clientName')}` | Priority: `{draft_info.get('priority')}` | Assign To Group: `{draft_info.get('assigntogroup') or draft_info.get('module')}`")
-=======
-            st.markdown(f"📋 **Draft Ready for Confirmation**: Client: `{draft_info.get('clientName')}` | Priority: `{draft_info.get('priority')}` | Module: `{draft_info.get('module')}`")
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
             col_c1, col_c2 = st.columns(2)
             with col_c1:
                 if st.button("✅ Confirm & Create Ticket", type="primary", use_container_width=True, key="confirm_ticket_btn"):
@@ -447,11 +388,7 @@ with tab_chat:
             # 0. Explicit Edit Command Detection (e.g. "edit priority to medium", "change client to ATG")
             is_edit_command = False
             edit_match = re.search(
-<<<<<<< HEAD
                 r'\b(?:edit|change|update|set|modify)\s+(priority|client|client\s+name|description|issue|desc|reported\s*by|reporter|type|ticket\s+type|assigntogroup|assign\s+to\s+group|group)\s*(?:to|is|=|:)?\s*(.+)',
-=======
-                r'\b(?:edit|change|update|set|modify)\s+(priority|client|client\s+name|description|issue|desc|reported\s*by|reporter|type|ticket\s+type)\s*(?:to|is|=|:)?\s*(.+)',
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
                 user_question,
                 re.IGNORECASE
             )
@@ -484,12 +421,9 @@ with tab_chat:
                 elif "type" in field_target:
                     draft["typeofticket"] = new_val.strip(" .")
 
-<<<<<<< HEAD
                 elif any(k in field_target for k in ["assigntogroup", "assign to group", "group"]):
                     draft["assigntogroup"] = new_val.strip(" .")
 
-=======
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
             if not is_edit_command:
                 # 1. Priority detection & extraction
                 priority_match = re.search(r'\bpriority\s*(?:is|:=|=|:)?\s*([^,\.\n;]+)', user_question, re.IGNORECASE)
@@ -564,13 +498,8 @@ with tab_chat:
                     if not re.search(r'^(?:client|priority|type|issue|desc|description)\b', by_val, re.IGNORECASE):
                         draft["reportedby"] = by_val
 
-<<<<<<< HEAD
                 if not draft.get("reportedby") and ams_api.email and ams_api.email != "your_email":
                     draft["reportedby"] = ams_api.email
-=======
-                if not draft.get("reportedby") and ams_api.username and ams_api.username != "your_username":
-                    draft["reportedby"] = ams_api.username
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
 
                 # 5. Description extraction
                 desc_match = re.search(r'(?:description|desc|issue|problem|summary)\s*(?:is|:=|=|:)\s*(.+)', user_question, re.IGNORECASE | re.DOTALL)
@@ -586,11 +515,7 @@ with tab_chat:
                     if phrase_match:
                         p_text = phrase_match.group(1).strip()
                         p_text = re.split(r'\.|\,|\;\s*(?:please\s+)?(?:create|raise|open|log)\s+(?:a\s+)?ticket', p_text, flags=re.IGNORECASE)[0].strip()
-<<<<<<< HEAD
                         p_text = re.sub(r'\s+(?:for\s+client|priority|assigntogroup|assign\s+to\s+group|module|reported\s+by).*$', '', p_text, flags=re.IGNORECASE).strip()
-=======
-                        p_text = re.sub(r'\s+(?:for\s+client|priority|module|reported\s+by).*$', '', p_text, flags=re.IGNORECASE).strip()
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
                         if p_text and len(p_text) > 3:
                             draft["descriptionofTicket"] = p_text
 
@@ -716,11 +641,7 @@ with tab_chat:
                         f"- 🏢 **Client Name**: `{client_name}`\n"
                         f"- ⚡ **Priority**: `{priority}`\n"
                         f"- 📂 **Ticket Type**: `{type_of_ticket}`\n"
-<<<<<<< HEAD
                         f"- 🏷️ **Assign To Group**: `{assigned_group}` *(Assigned by AI Agent)*\n"
-=======
-                        f"- 🏷️ **Assigned Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
->>>>>>> 7ed548ba8b9e79dba2b884b461997a2f3ead05d4
                         f"- 👤 **Reported By**: `{reported_by}`\n"
                         f"- 📝 **Description**: {description}\n\n"
                         "--- \n"
