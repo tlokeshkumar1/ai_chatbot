@@ -19,15 +19,17 @@ def filter_tickets(
     client_name=None,
     status=None,
     priority=None,
-    module=None,
+    assigntogroup=None,
     created_name=None,
     created_email=None,
     txn_id=None,
-    search_text=None
+    search_text=None,
+    module=None
 ):
     """
     Filter AMS tickets locally.
     """
+    target_group = assigntogroup or module
     result = tickets
 
     if ticket_no:
@@ -54,10 +56,10 @@ def filter_tickets(
             if equals(t.get("priority"), priority)
         ]
 
-    if module:
+    if target_group:
         result = [
             t for t in result
-            if contains(t.get("module"), module)
+            if contains(t.get("assigntogroup") or t.get("module"), target_group)
         ]
 
     if created_name:
@@ -84,6 +86,7 @@ def filter_tickets(
             "clientName",
             "ticketStatus",
             "priority",
+            "assigntogroup",
             "module",
             "createdname",
             "createdEmails",

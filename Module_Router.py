@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Complete list of valid modules in AMS
-MODULES = [
+# Complete list of valid assignment groups in AMS
+GROUPS = [
     "RPA",
     "SAP-FICO",
     "SAP-SD",
@@ -53,9 +53,10 @@ MODULES = [
     "SAP SDM",
     "UI / UX"
 ]
+MODULES = GROUPS  # Alias for backward compatibility
 
-# Rule-based fallback domain keywords
-MODULE_KEYWORDS = {
+# Rule-based fallback domain keywords for assignment groups
+GROUP_KEYWORDS = {
     "SAP-FICO": [r"\bfico\b", r"\bfinance\b", r"\bg/l\b", r"\bgl\b", r"\balert\b", r"\binvoice\b", r"\bpayment\b", r"\bledger\b", r"\basset accounting\b", r"\baccounts payable\b", r"\baccounts receivable\b", r"\btax\b"],
     "SAP-SD": [r"\bsd\b", r"\bsales\b", r"\bdistribution\b", r"\bbilling\b", r"\bshipping\b", r"\bdelivery\b", r"\bpricing\b", r"\bsales order\b"],
     "SAP ABAP": [r"\babap\b", r"\bdump\b", r"\bsyntax error\b", r"\bbapi\b", r"\bbadi\b", r"\bsmartform\b", r"\bsapscript\b", r"\bzprogram\b", r"\benhancement\b", r"\bse38\b", r"\bse80\b"],
@@ -85,20 +86,21 @@ MODULE_KEYWORDS = {
     "Data Analytics & AI": [r"\bdata analytics\b", r"\bmachine learning\b", r"\bml\b", r"\bai\b", r"\bllm\b"],
     "Support": [r"\bsupport\b", r"\bhelpdesk\b", r"\bgeneral\b"]
 }
+MODULE_KEYWORDS = GROUP_KEYWORDS  # Alias for backward compatibility
 
 
 def _classify_with_agent(description: str, api_key: str) -> str:
-    """Call Google Gemini API as an AI Agent to classify the ticket description into a valid AMS module."""
+    """Call Google Gemini API as an AI Agent to classify the ticket description into a valid AMS assignment group."""
     models = ["gemini-2.5-flash", "gemini-1.5-flash"]
-    modules_str = ", ".join(MODULES)
+    groups_str = ", ".join(GROUPS)
     
     prompt = (
         f"You are an expert IT Ticket Routing Agent.\n"
-        f"Analyze the following ticket description and assign it to the MOST appropriate module from this list:\n"
-        f"[{modules_str}]\n\n"
+        f"Analyze the following ticket description and assign it to the MOST appropriate assignment group from this list:\n"
+        f"[{groups_str}]\n\n"
         f"Ticket Description: \"{description}\"\n\n"
         f"Instructions:\n"
-        f"1. Respond ONLY with the exact module name from the list provided above.\n"
+        f"1. Respond ONLY with the exact group name from the list provided above.\n"
         f"2. Do not include any extra punctuation, explanations, or quotes."
     )
     
@@ -127,14 +129,14 @@ def _classify_with_agent(description: str, api_key: str) -> str:
                 text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
                 text_clean = re.sub(r'[^A-Za-z0-9\s/&\.-]', '', text).strip()
                 
-                # Verify exact or case-insensitive match against valid MODULES
-                for mod in MODULES:
-                    if mod.lower() == text_clean.lower():
-                        return mod
+                # Verify exact or case-insensitive match against valid GROUPS
+                for grp in GROUPS:
+                    if grp.lower() == text_clean.lower():
+                        return grp
                 # Partial match
-                for mod in MODULES:
-                    if mod.lower() in text_clean.lower() or text_clean.lower() in mod.lower():
-                        return mod
+                for grp in GROUPS:
+                    if grp.lower() in text_clean.lower() or text_clean.lower() in grp.lower():
+                        return grp
         except Exception as e:
             print(f"Gemini API routing failed with model {model}: {e}")
             continue
@@ -146,11 +148,11 @@ def _classify_with_rules(description: str) -> str:
     """Fallback rule-based keyword matching for ticket description."""
     desc_lower = description.lower()
     
-    # Priority match for specific module keywords
-    for mod, patterns in MODULE_KEYWORDS.items():
+    # Priority match for specific group keywords
+    for grp, patterns in GROUP_KEYWORDS.items():
         for pat in patterns:
             if re.search(pat, desc_lower):
-                return mod
+                return grp
 
     # Generic SAP check
     if "sap" in desc_lower:
@@ -159,9 +161,9 @@ def _classify_with_rules(description: str) -> str:
     return "Support"
 
 
-def assign_module(description: str) -> str:
+def assign_group(description: str) -> str:
     """
-    Main entry point for AI Agent module assignment based on ticket description.
+    Main entry point for AI Agent group assignment based on ticket description.
     Uses Gemini API AI Agent if key is available, falling back to rule-based classification.
     """
     if not description or not str(description).strip():
@@ -174,3 +176,7 @@ def assign_module(description: str) -> str:
             return agent_res
 
     return _classify_with_rules(description.strip())
+
+
+# Alias for backward compatibility
+assign_module = assign_group
