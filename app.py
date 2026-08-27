@@ -1,8 +1,10 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 import json
 import re
+from dotenv import load_dotenv
 from ams_api import AMSApi
 from ticket_filter import filter_tickets
 from Module_Router import assign_module, MODULES
@@ -84,8 +86,8 @@ def submit_draft_ticket(ams_api, draft):
     try:
         fetch_all_tickets.clear()
         fetch_ticket_statuses.clear()
-        fresh_tickets = fetch_all_tickets(ams_api.email, ams_api.password)
-        fresh_statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
+        fresh_tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+        fresh_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
         st.session_state.tickets = fresh_tickets
         st.session_state.ticket_statuses = fresh_statuses
 
@@ -158,16 +160,22 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ AMS Configuration")
     
-    username_val = ams_api.username if ams_api.username != "your_username" else ""
-    password_val = ams_api.password if ams_api.password != "your_password" else ""
+    load_dotenv(override=True)
+    env_user = os.getenv("AMS_USERNAME") or os.getenv("AMS_USER") or os.getenv("USERNAME") or ""
+    
+    username_val = ams_api.username
+    password_val = ams_api.password
     
     input_username = st.text_input("Username", value=username_val, placeholder="Enter AMS Username")
     input_password = st.text_input("Password", value=password_val, type="password", placeholder="Enter AMS Password")
     
-    if input_username:
-        ams_api.username = input_username
-    if input_password:
-        ams_api.password = input_password
+    ams_api.username = input_username
+    ams_api.password = input_password
+
+    if env_user:
+        st.caption(f"💡 Default username loaded from `.env`: `{env_user}`")
+    else:
+        st.caption("ℹ️ You can set `AMS_USERNAME` and `AMS_PASSWORD` in `.env` for auto-login.")
 
     st.divider()
     st.subheader("⚡ Quick Actions")
@@ -254,11 +262,9 @@ with tab_chat:
             st.markdown(message["content"])
             if "data" in message and message["data"]:
                 df = pd.DataFrame(message["data"])
-                if "module" in df.columns and "assigntogroup" not in df.columns:
-                    df["assigntogroup"] = df["module"]
                 display_columns = [
                     "ticketNo", "clientName", "priority", "ticketStatus",
-                    "assigntogroup", "createdname", "remarks", "createddate", "closedondate", "txnId"
+                    "module", "createdname", "remarks", "createddate", "closedondate", "txnId"
                 ]
                 available_columns = [c for c in display_columns if c in df.columns]
                 if available_columns:
@@ -379,71 +385,118 @@ with tab_chat:
             # Initialize or carry over existing draft
             draft = dict(st.session_state.pending_ticket_draft or {})
 
-            # 1. Priority detection & extraction
-            priority_match = re.search(r'\bpriority\s*[:=]\s*([^,\n;]+)', user_question, re.IGNORECASE)
-            if priority_match:
-                p_val = priority_match.group(1).strip()
-                # If priority value is another parameter keyword, it was left empty
-                if re.search(r'^(?:issue|desc|description|client|by|reported|type)\s*[:=]', p_val, re.IGNORECASE):
-                    draft["priority"] = None
-                else:
-                    p_lower = p_val.lower()
-                    if re.search(r'\b(very high|critical|p1|production impacted)\b', p_lower):
+            # 0. Explicit Edit Command Detection (e.g. "edit priority to medium", "change client to ATG")
+            is_edit_command = False
+            edit_match = re.search(
+                r'\b(?:edit|change|update|set|modify)\s+(priority|client|client\s+name|description|issue|desc|reported\s*by|reporter|type|ticket\s+type)\s*(?:to|is|=|:)?\s*(.+)',
+                user_question,
+                re.IGNORECASE
+            )
+            if edit_match:
+                is_edit_command = True
+                field_target = edit_match.group(1).lower().strip()
+                new_val = edit_match.group(2).strip()
+
+                if "priority" in field_target:
+                    if re.search(r'\b(very high|critical|p1|production impacted)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "Very High (Production Impacted)"
-                    elif re.search(r'\b(high|p2|business impacted)\b', p_lower):
+                    elif re.search(r'\b(high|p2|business impacted)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "High (Business Impacted)"
-                    elif re.search(r'\b(medium|med|p3)\b', p_lower):
+                    elif re.search(r'\b(medium|med|p3)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "Medium"
-                    elif re.search(r'\b(low|p4)\b', p_lower):
+                    elif re.search(r'\b(low|p4)\b', new_val, re.IGNORECASE):
                         draft["priority"] = "Low"
                     else:
-                        draft["priority"] = None
-            elif not draft.get("priority"):
-                if re.search(r'\b(very high|critical|p1|production impacted)\b', question):
-                    draft["priority"] = "Very High (Production Impacted)"
-                elif re.search(r'\b(high|p2|business impacted)\b', question):
-                    draft["priority"] = "High (Business Impacted)"
-                elif re.search(r'\b(medium|med|p3)\b', question):
-                    draft["priority"] = "Medium"
-                elif re.search(r'\b(low|p4)\b', question):
-                    draft["priority"] = "Low"
+                        draft["priority"] = new_val.capitalize()
 
-            # 2. Type of ticket detection
-            for t_type in ["Service Request", "Change Request", "S PO", "Incident"]:
-                if re.search(r'\b' + re.escape(t_type.lower()) + r'\b', question):
-                    draft["typeofticket"] = t_type
-                    break
-            if not draft.get("typeofticket"):
-                draft["typeofticket"] = "Incident"
+                elif "client" in field_target:
+                    draft["clientName"] = new_val.strip(" .")
 
-            # 3. Client Name extraction
-            client_match = re.search(r'(?:client(?:\s*name)?|organization)\s*[:=]\s*([^,\n;]+)', user_question, re.IGNORECASE)
-            if client_match:
-                c_val = client_match.group(1).strip()
-                if not re.search(r'^(?:priority|type|issue|desc|description|by|reported)\s*[:=]', c_val, re.IGNORECASE):
-                    draft["clientName"] = c_val
-            elif not draft.get("clientName"):
-                for item in pool:
-                    c = item.get("clientName")
-                    if c and len(str(c)) > 3 and str(c).lower() in question:
-                        draft["clientName"] = str(c)
+                elif any(k in field_target for k in ["description", "issue", "desc"]):
+                    draft["descriptionofTicket"] = new_val.strip(" .")
+
+                elif any(k in field_target for k in ["reported", "reporter", "by"]):
+                    draft["reportedby"] = new_val.strip(" .")
+
+                elif "type" in field_target:
+                    draft["typeofticket"] = new_val.strip(" .")
+
+            if not is_edit_command:
+                # 1. Priority detection & extraction
+                priority_match = re.search(r'\bpriority\s*(?:is|:=|=|:)?\s*([^,\.\n;]+)', user_question, re.IGNORECASE)
+                if priority_match:
+                    p_val = priority_match.group(1).strip()
+                    if not re.search(r'^(?:issue|desc|description|client|by|reported|type)\b', p_val, re.IGNORECASE):
+                        p_lower = p_val.lower()
+                        if re.search(r'\b(very high|critical|p1|production impacted)\b', p_lower):
+                            draft["priority"] = "Very High (Production Impacted)"
+                        elif re.search(r'\b(high|p2|business impacted)\b', p_lower):
+                            draft["priority"] = "High (Business Impacted)"
+                        elif re.search(r'\b(medium|med|p3)\b', p_lower):
+                            draft["priority"] = "Medium"
+                        elif re.search(r'\b(low|p4)\b', p_lower):
+                            draft["priority"] = "Low"
+
+                if not draft.get("priority"):
+                    if re.search(r'\b(very high|critical|p1|production impacted)\b', question):
+                        draft["priority"] = "Very High (Production Impacted)"
+                    elif re.search(r'\b(high|p2|business impacted)\b', question):
+                        draft["priority"] = "High (Business Impacted)"
+                    elif re.search(r'\b(medium|med|p3)\b', question):
+                        draft["priority"] = "Medium"
+                    elif re.search(r'\b(low|p4)\b', question):
+                        draft["priority"] = "Low"
+
+                # 2. Type of ticket detection
+                for t_type in ["Service Request", "Change Request", "S PO", "Incident"]:
+                    if re.search(r'\b' + re.escape(t_type.lower()) + r'\b', question):
+                        draft["typeofticket"] = t_type
                         break
+                if not draft.get("typeofticket"):
+                    draft["typeofticket"] = "Incident"
 
-            if not draft.get("clientName"):
-                for_match = re.search(r'\bfor\s+(?:client\s+)?([A-Za-z0-9\s&.]+?)(?:\s*[:,]|\s+with|\s+priority|\s+issue|\s+desc|\s+by|$)', user_question, re.IGNORECASE)
-                if for_match:
-                    candidate = for_match.group(1).strip()
-                    if candidate.lower() not in ["ticket", "a ticket", "the ticket", "ams", "sap", "incident", "issue", "me", "us", "help"]:
-                        draft["clientName"] = candidate
+                # 3. Client Name extraction
+                client_match = re.search(r'(?:client(?:\s*name)?|organization)\s*(?:is|:=|=|:)\s*([^,\.\n;]+)', user_question, re.IGNORECASE)
+                if client_match:
+                    c_val = client_match.group(1).strip()
+                    if not re.search(r'^(?:priority|type|issue|desc|description|by|reported)\b', c_val, re.IGNORECASE):
+                        draft["clientName"] = c_val
 
-            # 4. Reported By extraction
-            by_match = re.search(r'(?:reported\s*by|reporter|by)\s*[:=]\s*([^,\n;]+)', user_question, re.IGNORECASE)
-            if by_match:
-                by_val = by_match.group(1).strip()
-                if not re.search(r'^(?:client|priority|type|issue|desc|description)\s*[:=]', by_val, re.IGNORECASE):
-                    draft["reportedby"] = by_val
-            elif not draft.get("reportedby") and ams_api.username and ams_api.username != "your_username":
-                draft["reportedby"] = ams_api.username
+                # Direct lookup in pool client names if not extracted yet
+                if not draft.get("clientName"):
+                    known_clients = sorted(list({str(x["clientName"]) for x in pool if x.get("clientName")}), key=len, reverse=True) if pool else []
+                    default_clients = ["Karamtara Engineering Pvt Ltd", "AAB", "ATG", "ACSEN HyVeg Pvt Ltd", "AJAX Engineering Pvt Ltd"]
+                    for dc in default_clients:
+                        if dc not in known_clients:
+                            known_clients.append(dc)
+                    known_clients.sort(key=len, reverse=True)
+
+                    for c_name in known_clients:
+                        if len(c_name) <= 4:
+                            if re.search(r'\b' + re.escape(c_name) + r'\b', user_question, re.IGNORECASE):
+                                draft["clientName"] = c_name
+                                break
+                        else:
+                            if c_name.lower() in question:
+                                draft["clientName"] = c_name
+                                break
+
+                if not draft.get("clientName"):
+                    for_match = re.search(r'\bfor\s+(?:client\s+)?([A-Za-z0-9\s&.]+?)(?:\s*[:,]|\s+with|\s+priority|\s+issue|\s+desc|\s+by|$|\.)', user_question, re.IGNORECASE)
+                    if for_match:
+                        candidate = for_match.group(1).strip()
+                        if candidate.lower() not in ["ticket", "a ticket", "the ticket", "ams", "sap", "incident", "issue", "me", "us", "help"]:
+                            draft["clientName"] = candidate
+
+                # 4. Reported By extraction
+                by_match = re.search(r'(?:reported\s*by|reporter|by)\s*(?:is|:=|=|:)?\s*([A-Za-z0-9\s&_.]+?)(?:\.|\,|\;|\b(?:client|priority|type|issue|desc|description)\b|$)', user_question, re.IGNORECASE)
+                if by_match:
+                    by_val = by_match.group(1).strip()
+                    if not re.search(r'^(?:client|priority|type|issue|desc|description)\b', by_val, re.IGNORECASE):
+                        draft["reportedby"] = by_val
+
+                if not draft.get("reportedby") and ams_api.username and ams_api.username != "your_username":
+                    draft["reportedby"] = ams_api.username
 
                 # 5. Description extraction
                 desc_match = re.search(r'(?:description|desc|issue|problem|summary)\s*(?:is|:=|=|:)\s*(.+)', user_question, re.IGNORECASE | re.DOTALL)
@@ -470,6 +523,19 @@ with tab_chat:
                         val = re.sub(r',?\s*priority\s+(?:p[1-4]|very high|high|medium|low|critical)\b.*$', '', val, flags=re.IGNORECASE).strip()
                         if val:
                             draft["descriptionofTicket"] = val
+
+                if not draft.get("descriptionofTicket") and has_active_draft:
+                    clean_text = user_question
+                    if draft.get("clientName"):
+                        clean_text = re.sub(r'client\s*(?:name)?\s*(?:is|:=|=|:)?\s*' + re.escape(draft["clientName"]), '', clean_text, flags=re.IGNORECASE)
+                        clean_text = re.sub(r'\b' + re.escape(draft["clientName"]) + r'\b', '', clean_text, flags=re.IGNORECASE)
+                    if draft.get("reportedby"):
+                        clean_text = re.sub(r'reported\s*by\s*(?:is|:=|=|:)?\s*' + re.escape(draft["reportedby"]), '', clean_text, flags=re.IGNORECASE)
+                    clean_text = re.sub(r'priority\s*(?:is|:=|=|:)?\s*(?:very high|high|medium|low|critical|p[1-4])', '', clean_text, flags=re.IGNORECASE)
+                    clean_text = re.sub(r'\b(create ticket|raise ticket|new ticket|ticket|incident|issue|priority|client|reported by)\b', '', clean_text, flags=re.IGNORECASE)
+                    clean_text = clean_text.strip(" .,;:-")
+                    if len(clean_text) > 3:
+                        draft["descriptionofTicket"] = clean_text
 
             # Check missing required fields
             missing_fields = []
@@ -501,12 +567,12 @@ with tab_chat:
                 else:
                     status_lines.append("- ⚡ **Priority**: ❌ *Missing (Please specify: Low, Medium, High, or Critical)*")
 
-                # Description & Group Assignment
+                # Description & Module Assignment
                 if draft.get("descriptionofTicket"):
-                    assigned_grp = assign_group(draft["descriptionofTicket"])
-                    draft["assigntogroup"] = assigned_grp
+                    assigned_mod = assign_module(draft["descriptionofTicket"])
+                    draft["module"] = assigned_mod
                     status_lines.append(f"- 📝 **Description**: {draft['descriptionofTicket']} ✅")
-                    status_lines.append(f"- 🏷️ **Assigned Group**: `{assigned_grp}` *(Assigned by AI Agent)* ✅")
+                    status_lines.append(f"- 🏷️ **Assigned Module**: `{assigned_mod}` *(Assigned by AI Agent)* ✅")
                 else:
                     status_lines.append("- 📝 **Description**: ❌ *Missing (Issue details)*")
 
@@ -534,14 +600,14 @@ with tab_chat:
                 )
 
             else:
-                # All fields are present -> Create Ticket!
+                # All required fields are present
                 client_name = draft["clientName"]
                 priority = draft["priority"]
                 type_of_ticket = draft.get("typeofticket", "Incident")
                 reported_by = draft["reportedby"]
                 description = draft["descriptionofTicket"]
-                assigned_group = assign_group(description)
-                draft["assigntogroup"] = assigned_group
+                assigned_module = assign_module(description)
+                draft["module"] = assigned_module
 
                 # Check if user is confirming a draft that is ready for confirmation
                 confirm_keywords = ["confirm", "yes", "create", "proceed", "submit", "ok", "create ticket", "go ahead", "do it", "confirm creation", "create ticket now"]
@@ -615,7 +681,7 @@ with tab_chat:
             priority = None
             status = None
             client_name_query = None
-            group_query = None
+            module_query = None
 
             # Only apply secondary attribute filters if NOT querying a specific ticket directly
             if not ticket_no:
@@ -642,11 +708,11 @@ with tab_chat:
                         client_name_query = c_name
                         break
 
-                # 5. Assign to Group detection
+                # 5. Module detection
                 for item in pool:
-                    g_name = item.get("assigntogroup") or item.get("module")
-                    if g_name and len(str(g_name)) > 2 and str(g_name).lower() in question:
-                        group_query = g_name
+                    m_name = item.get("module")
+                    if m_name and len(str(m_name)) > 2 and str(m_name).lower() in question:
+                        module_query = m_name
                         break
 
             filtered = filter_tickets(
@@ -655,8 +721,8 @@ with tab_chat:
                 client_name=client_name_query,
                 status=status,
                 priority=priority,
-                assigntogroup=group_query,
-                search_text=None if (ticket_no or priority or status or client_name_query or group_query) else user_question
+                module=module_query,
+                search_text=None if (ticket_no or priority or status or client_name_query or module_query) else user_question
             )
 
             count = len(filtered)
@@ -670,7 +736,7 @@ with tab_chat:
                         f"- **Client**: {t.get('clientName', 'N/A')}\n"
                         f"- **Status**: `{t.get('ticketStatus', 'N/A')}`\n"
                         f"- **Priority**: `{t.get('priority', 'N/A')}`\n"
-                        f"- **Assign to Group**: {t.get('assigntogroup', t.get('module', 'N/A'))}\n"
+                        f"- **Module**: {t.get('module', 'N/A')}\n"
                         f"- **Created By**: {t.get('createdname', 'N/A')} ({t.get('createdEmails', '')})\n"
                         f"- **Created Date**: {t.get('createddate', 'N/A')}\n"
                         f"- **Closed Date**: {t.get('closedondate', 'N/A')}\n"
@@ -687,8 +753,8 @@ with tab_chat:
                         filters_used.append(f"priority **{priority.title()}**")
                     if status:
                         filters_used.append(f"status **{status.title()}**")
-                    if group_query:
-                        filters_used.append(f"group **{group_query}**")
+                    if module_query:
+                        filters_used.append(f"module **{module_query}**")
 
                     if filters_used:
                         answer = f"Found **{count}** ticket(s) matching " + ", ".join(filters_used) + "."
@@ -739,7 +805,7 @@ with tab_all_tickets:
         unique_clients = ["All"] + sorted(list({str(x["clientName"]) for x in tickets_data if x.get("clientName")}))
         unique_statuses = ["All"] + sorted(list({str(x["ticketStatus"]) for x in tickets_data if x.get("ticketStatus")}))
         unique_priorities = ["All"] + sorted(list({str(x["priority"]) for x in tickets_data if x.get("priority")}))
-        unique_groups = ["All"] + sorted(list({str(x.get("assigntogroup") or x.get("module")) for x in tickets_data if (x.get("assigntogroup") or x.get("module"))}))
+        unique_modules = ["All"] + sorted(list({str(x["module"]) for x in tickets_data if x.get("module")}))
 
         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
         with f_col1:
@@ -749,7 +815,7 @@ with tab_all_tickets:
         with f_col3:
             sel_prio = st.selectbox("Filter Priority", unique_priorities, key="f_prio")
         with f_col4:
-            sel_grp = st.selectbox("Filter Assign to Group", unique_groups, key="f_grp")
+            sel_mod = st.selectbox("Filter Module", unique_modules, key="f_mod")
 
         with col_t_search:
             t_search = st.text_input("🔍 Search Tickets (Ticket No, Description, Name, Email, Remarks)", placeholder="e.g. Kar2608133, SD, Veera...", key="t_search_box")
@@ -760,7 +826,7 @@ with tab_all_tickets:
             client_name=None if sel_client == "All" else sel_client,
             status=None if sel_status == "All" else sel_status,
             priority=None if sel_prio == "All" else sel_prio,
-            assigntogroup=None if sel_grp == "All" else sel_grp,
+            module=None if sel_mod == "All" else sel_mod,
             search_text=t_search if t_search else None
         )
 
@@ -781,11 +847,9 @@ with tab_all_tickets:
 
         if filtered_all:
             df_filtered_all = pd.DataFrame(filtered_all)
-            if "module" in df_filtered_all.columns and "assigntogroup" not in df_filtered_all.columns:
-                df_filtered_all["assigntogroup"] = df_filtered_all["module"]
 
             column_order = [
-                "ticketNo", "clientName", "ticketStatus", "priority", "assigntogroup",
+                "ticketNo", "clientName", "ticketStatus", "priority", "module",
                 "createdname", "createdEmails", "createddate", "closedondate", "remarks"
             ]
             ordered_cols = [c for c in column_order if c in df_filtered_all.columns] + [c for c in df_filtered_all.columns if c not in column_order]
@@ -983,11 +1047,11 @@ with tab_create:
                 value="NO",
                 help="Any additional remarks"
             )
-            assigntogroup_val = st.selectbox(
-                "Assign to Group *",
-                options=GROUPS,
-                index=GROUPS.index("SAP") if "SAP" in GROUPS else 0,
-                help="Select target group"
+            module_val = st.selectbox(
+                "Module *",
+                options=MODULES,
+                index=MODULES.index("SAP") if "SAP" in MODULES else 0,
+                help="Select ticket module"
             )
 
         description_val = st.text_area(
@@ -1012,7 +1076,7 @@ with tab_create:
             "descriptionofTicket": description_val.strip() if description_val else None,
             "screenshort": screenshort_val.strip() if screenshort_val else None,
             "remarks": remarks_val.strip() if remarks_val else None,
-            "assigntogroup": assigntogroup_val.strip() if assigntogroup_val else None
+            "module": module_val.strip() if module_val else None
         }
 
         with st.expander("🔍 Preview JSON Request Payload (TicketCreateRequest)"):
