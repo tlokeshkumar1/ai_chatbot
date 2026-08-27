@@ -29,13 +29,12 @@ def filter_tickets(
     """
     Filter AMS tickets locally.
     """
-    target_group = assigntogroup or module
     result = tickets
 
     if ticket_no:
         result = [
             t for t in result
-            if equals(t.get("ticketNo"), ticket_no)
+            if equals(t.get("ticketNo"), ticket_no) or equals(t.get("ticketId"), ticket_no)
         ]
 
     if client_name:
@@ -56,10 +55,11 @@ def filter_tickets(
             if equals(t.get("priority"), priority)
         ]
 
+    target_group = assigntogroup or module
     if target_group:
         result = [
             t for t in result
-            if contains(t.get("assigntogroup") or t.get("module"), target_group)
+            if contains(t.get("assigntogroup"), target_group) or contains(t.get("module"), target_group)
         ]
 
     if created_name:
@@ -83,6 +83,7 @@ def filter_tickets(
     if search_text:
         searchable_fields = [
             "ticketNo",
+            "ticketId",
             "clientName",
             "ticketStatus",
             "priority",
@@ -102,3 +103,4 @@ def filter_tickets(
         ]
 
     return result
+

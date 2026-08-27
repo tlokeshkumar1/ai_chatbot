@@ -7,7 +7,7 @@ import re
 from dotenv import load_dotenv
 from ams_api import AMSApi
 from ticket_filter import filter_tickets
-from Module_Router import assign_module, MODULES
+from Module_Router import assign_group, GROUPS, assign_module, MODULES
 
 load_dotenv(override=True)
 
@@ -21,13 +21,13 @@ st.set_page_config(
 # Cached API Loaders
 # ---------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_all_tickets(username, password):
-    api = AMSApi(username=username, password=password)
+def fetch_all_tickets(email, password):
+    api = AMSApi(email=email, password=password)
     return api.get_tickets()
 
 @st.cache_data(ttl=60, show_spinner=False)
-def fetch_ticket_statuses(username, password):
-    api = AMSApi(username=username, password=password)
+def fetch_ticket_statuses(email, password):
+    api = AMSApi(email=email, password=password)
     return api.get_ticket_status()
 
 
@@ -48,7 +48,7 @@ def submit_draft_ticket(ams_api, draft):
     type_of_ticket = draft.get("typeofticket", "Incident")
     reported_by = draft["reportedby"]
     description = draft["descriptionofTicket"]
-    assigned_module = draft.get("module") or assign_module(description)
+    assigned_group = draft.get("assigntogroup") or draft.get("module") or assign_group(description)
 
     now_utc = datetime.now(timezone.utc)
     reported_on_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -64,8 +64,8 @@ def submit_draft_ticket(ams_api, draft):
         "reportedby": reported_by,
         "descriptionofTicket": description,
         "screenshort": "N/A",
-        "remarks": f"Created via AI Ticket Assistant (Module: {assigned_module})",
-        "module": assigned_module
+        "remarks": f"Created via AI Ticket Assistant (Assign To Group: {assigned_group})",
+        "assigntogroup": assigned_group
     }
 
     create_res = ams_api.create_ticket(ticket_payload)
@@ -74,20 +74,20 @@ def submit_draft_ticket(ams_api, draft):
     new_txn_id = None
 
     if isinstance(create_res, dict):
-        new_ticket_no = create_res.get("ticketNo") or create_res.get("ticketNumber") or create_res.get("TicketNo")
+        new_ticket_no = create_res.get("ticketId") or create_res.get("ticketNo") or create_res.get("ticketNumber") or create_res.get("TicketNo")
         new_txn_id = create_res.get("txnId") or create_res.get("transactionId") or create_res.get("TxnId")
         if not new_ticket_no and isinstance(create_res.get("data"), dict):
-            new_ticket_no = create_res["data"].get("ticketNo") or create_res["data"].get("ticketNumber")
+            new_ticket_no = create_res["data"].get("ticketId") or create_res["data"].get("ticketNo") or create_res["data"].get("ticketNumber")
             new_txn_id = create_res["data"].get("txnId") or create_res["data"].get("transactionId")
         elif not new_ticket_no and isinstance(create_res.get("result"), dict):
-            new_ticket_no = create_res["result"].get("ticketNo") or create_res["result"].get("ticketNumber")
+            new_ticket_no = create_res["result"].get("ticketId") or create_res["result"].get("ticketNo") or create_res["result"].get("ticketNumber")
             new_txn_id = create_res["result"].get("txnId") or create_res["result"].get("transactionId")
 
     try:
         fetch_all_tickets.clear()
         fetch_ticket_statuses.clear()
-        fresh_tickets = fetch_all_tickets(ams_api.username, ams_api.password)
-        fresh_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
+        fresh_tickets = fetch_all_tickets(ams_api.email, ams_api.password)
+        fresh_statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
         st.session_state.tickets = fresh_tickets
         st.session_state.ticket_statuses = fresh_statuses
 
@@ -107,7 +107,7 @@ def submit_draft_ticket(ams_api, draft):
             if candidates:
                 candidates.sort(key=lambda item: int(item.get("txnId") or 0), reverse=True)
                 newest = candidates[0]
-                new_ticket_no = new_ticket_no or newest.get("ticketNo")
+                new_ticket_no = new_ticket_no or newest.get("ticketId") or newest.get("ticketNo")
                 new_txn_id = new_txn_id or newest.get("txnId")
     except Exception:
         pass
@@ -118,12 +118,12 @@ def submit_draft_ticket(ams_api, draft):
     answer = (
         f"### 🎉 Ticket Created Successfully!\n\n"
         f"The ticket has been created and submitted to AMS (`POST /api/Ticket/CreateTicket`).\n\n"
-        f"- **🎫 Ticket Number**: {ticket_no_display}\n"
+        f"- **🎫 Ticket ID / Number**: {ticket_no_display}\n"
         f"- **🔢 Transaction ID**: {txn_id_display}\n"
         f"- **🏢 Client**: `{client_name}`\n"
         f"- **⚡ Priority**: `{priority}`\n"
         f"- **📂 Type**: `{type_of_ticket}`\n"
-        f"- **🏷️ Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
+        f"- **🏷️ Assign To Group**: `{assigned_group}` *(Assigned by AI Agent)*\n"
         f"- **👤 Reported By**: `{reported_by}`\n"
         f"- **📝 Description**: {description}\n"
         f"- **🕒 Timestamp**: `{now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
@@ -161,21 +161,21 @@ with st.sidebar:
     st.header("⚙️ AMS Configuration")
     
     load_dotenv(override=True)
-    env_user = os.getenv("AMS_USERNAME") or os.getenv("AMS_USER") or os.getenv("USERNAME") or ""
+    env_email = os.getenv("AMS_EMAIL") or os.getenv("EMAIL") or ""
     
-    username_val = ams_api.username
+    email_val = ams_api.email
     password_val = ams_api.password
     
-    input_username = st.text_input("Username", value=username_val, placeholder="Enter AMS Username")
+    input_email = st.text_input("Email", value=email_val, placeholder="Enter AMS Email")
     input_password = st.text_input("Password", value=password_val, type="password", placeholder="Enter AMS Password")
     
-    ams_api.username = input_username
+    ams_api.email = input_email
     ams_api.password = input_password
 
-    if env_user:
-        st.caption(f"💡 Default username loaded from `.env`: `{env_user}`")
+    if env_email:
+        st.caption(f"💡 Default email loaded from `.env`: `{env_email}`")
     else:
-        st.caption("ℹ️ You can set `AMS_USERNAME` and `AMS_PASSWORD` in `.env` for auto-login.")
+        st.caption("ℹ️ You can set `AMS_EMAIL` and `AMS_PASSWORD` in `.env` for auto-login.")
 
     st.divider()
     st.subheader("⚡ Quick Actions")
@@ -186,7 +186,7 @@ with st.sidebar:
             try:
                 with st.spinner("Loading tickets (/api/Ticket)..."):
                     fetch_all_tickets.clear()
-                    tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+                    tickets = fetch_all_tickets(ams_api.email, ams_api.password)
                     st.session_state.tickets = tickets
                 st.success(f"Loaded {len(tickets)} tickets.")
             except Exception as e:
@@ -197,22 +197,22 @@ with st.sidebar:
             try:
                 with st.spinner("Fetching statuses (/api/Ticket/Status)..."):
                     fetch_ticket_statuses.clear()
-                    statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
+                    statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
                     st.session_state.ticket_statuses = statuses
                 st.success(f"Loaded {len(statuses)} statuses.")
             except Exception as e:
                 st.error(f"Status fetch error:\n{e}")
 
     # Auto-load initial data if credentials are present
-    if st.session_state.tickets is None and ams_api.username and ams_api.password:
+    if st.session_state.tickets is None and ams_api.email and ams_api.password:
         try:
-            st.session_state.tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+            st.session_state.tickets = fetch_all_tickets(ams_api.email, ams_api.password)
         except Exception:
             pass
 
-    if st.session_state.ticket_statuses is None and ams_api.username and ams_api.password:
+    if st.session_state.ticket_statuses is None and ams_api.email and ams_api.password:
         try:
-            st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
+            st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
         except Exception:
             pass
 
@@ -263,8 +263,8 @@ with tab_chat:
             if "data" in message and message["data"]:
                 df = pd.DataFrame(message["data"])
                 display_columns = [
-                    "ticketNo", "clientName", "priority", "ticketStatus",
-                    "module", "createdname", "remarks", "createddate", "closedondate", "txnId"
+                    "ticketNo", "ticketId", "clientName", "priority", "ticketStatus",
+                    "assigntogroup", "createdname", "remarks", "createddate", "closedondate", "txnId"
                 ]
                 available_columns = [c for c in display_columns if c in df.columns]
                 if available_columns:
@@ -276,7 +276,7 @@ with tab_chat:
     if st.session_state.pending_ticket_draft and st.session_state.pending_ticket_draft.get("ready_for_confirmation"):
         draft_info = st.session_state.pending_ticket_draft
         with st.container(border=True):
-            st.markdown(f"📋 **Draft Ready for Confirmation**: Client: `{draft_info.get('clientName')}` | Priority: `{draft_info.get('priority')}` | Module: `{draft_info.get('module')}`")
+            st.markdown(f"📋 **Draft Ready for Confirmation**: Client: `{draft_info.get('clientName')}` | Priority: `{draft_info.get('priority')}` | Assign To Group: `{draft_info.get('assigntogroup') or draft_info.get('module')}`")
             col_c1, col_c2 = st.columns(2)
             with col_c1:
                 if st.button("✅ Confirm & Create Ticket", type="primary", use_container_width=True, key="confirm_ticket_btn"):
@@ -313,7 +313,7 @@ with tab_chat:
         if st.session_state.tickets is None:
             try:
                 with st.spinner("Loading ticket database from AMS API (/api/Ticket)..."):
-                    st.session_state.tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+                    st.session_state.tickets = fetch_all_tickets(ams_api.email, ams_api.password)
             except Exception as ex:
                 st.warning(f"Could not load full ticket dataset: {ex}")
 
@@ -388,7 +388,7 @@ with tab_chat:
             # 0. Explicit Edit Command Detection (e.g. "edit priority to medium", "change client to ATG")
             is_edit_command = False
             edit_match = re.search(
-                r'\b(?:edit|change|update|set|modify)\s+(priority|client|client\s+name|description|issue|desc|reported\s*by|reporter|type|ticket\s+type)\s*(?:to|is|=|:)?\s*(.+)',
+                r'\b(?:edit|change|update|set|modify)\s+(priority|client|client\s+name|description|issue|desc|reported\s*by|reporter|type|ticket\s+type|assigntogroup|assign\s+to\s+group|group)\s*(?:to|is|=|:)?\s*(.+)',
                 user_question,
                 re.IGNORECASE
             )
@@ -420,6 +420,9 @@ with tab_chat:
 
                 elif "type" in field_target:
                     draft["typeofticket"] = new_val.strip(" .")
+
+                elif any(k in field_target for k in ["assigntogroup", "assign to group", "group"]):
+                    draft["assigntogroup"] = new_val.strip(" .")
 
             if not is_edit_command:
                 # 1. Priority detection & extraction
@@ -495,8 +498,8 @@ with tab_chat:
                     if not re.search(r'^(?:client|priority|type|issue|desc|description)\b', by_val, re.IGNORECASE):
                         draft["reportedby"] = by_val
 
-                if not draft.get("reportedby") and ams_api.username and ams_api.username != "your_username":
-                    draft["reportedby"] = ams_api.username
+                if not draft.get("reportedby") and ams_api.email and ams_api.email != "your_email":
+                    draft["reportedby"] = ams_api.email
 
                 # 5. Description extraction
                 desc_match = re.search(r'(?:description|desc|issue|problem|summary)\s*(?:is|:=|=|:)\s*(.+)', user_question, re.IGNORECASE | re.DOTALL)
@@ -512,7 +515,7 @@ with tab_chat:
                     if phrase_match:
                         p_text = phrase_match.group(1).strip()
                         p_text = re.split(r'\.|\,|\;\s*(?:please\s+)?(?:create|raise|open|log)\s+(?:a\s+)?ticket', p_text, flags=re.IGNORECASE)[0].strip()
-                        p_text = re.sub(r'\s+(?:for\s+client|priority|module|reported\s+by).*$', '', p_text, flags=re.IGNORECASE).strip()
+                        p_text = re.sub(r'\s+(?:for\s+client|priority|assigntogroup|assign\s+to\s+group|module|reported\s+by).*$', '', p_text, flags=re.IGNORECASE).strip()
                         if p_text and len(p_text) > 3:
                             draft["descriptionofTicket"] = p_text
 
@@ -567,12 +570,12 @@ with tab_chat:
                 else:
                     status_lines.append("- ⚡ **Priority**: ❌ *Missing (Please specify: Low, Medium, High, or Critical)*")
 
-                # Description & Module Assignment
+                # Description & Assign To Group
                 if draft.get("descriptionofTicket"):
-                    assigned_mod = assign_module(draft["descriptionofTicket"])
-                    draft["module"] = assigned_mod
+                    assigned_group = assign_group(draft["descriptionofTicket"])
+                    draft["assigntogroup"] = assigned_group
                     status_lines.append(f"- 📝 **Description**: {draft['descriptionofTicket']} ✅")
-                    status_lines.append(f"- 🏷️ **Assigned Module**: `{assigned_mod}` *(Assigned by AI Agent)* ✅")
+                    status_lines.append(f"- 🏷️ **Assigned Group**: `{assigned_group}` *(Assigned by AI Agent)* ✅")
                 else:
                     status_lines.append("- 📝 **Description**: ❌ *Missing (Issue details)*")
 
@@ -606,8 +609,8 @@ with tab_chat:
                 type_of_ticket = draft.get("typeofticket", "Incident")
                 reported_by = draft["reportedby"]
                 description = draft["descriptionofTicket"]
-                assigned_module = assign_module(description)
-                draft["module"] = assigned_module
+                assigned_group = assign_group(description)
+                draft["assigntogroup"] = assigned_group
 
                 # Check if user is confirming a draft that is ready for confirmation
                 confirm_keywords = ["confirm", "yes", "create", "proceed", "submit", "ok", "create ticket", "go ahead", "do it", "confirm creation", "create ticket now"]
@@ -638,7 +641,7 @@ with tab_chat:
                         f"- 🏢 **Client Name**: `{client_name}`\n"
                         f"- ⚡ **Priority**: `{priority}`\n"
                         f"- 📂 **Ticket Type**: `{type_of_ticket}`\n"
-                        f"- 🏷️ **Assigned Module**: `{assigned_module}` *(Assigned by AI Agent)*\n"
+                        f"- 🏷️ **Assign To Group**: `{assigned_group}` *(Assigned by AI Agent)*\n"
                         f"- 👤 **Reported By**: `{reported_by}`\n"
                         f"- 📝 **Description**: {description}\n\n"
                         "--- \n"
@@ -681,7 +684,7 @@ with tab_chat:
             priority = None
             status = None
             client_name_query = None
-            module_query = None
+            assigntogroup_query = None
 
             # Only apply secondary attribute filters if NOT querying a specific ticket directly
             if not ticket_no:
@@ -708,11 +711,11 @@ with tab_chat:
                         client_name_query = c_name
                         break
 
-                # 5. Module detection
+                # 5. Assign to group detection
                 for item in pool:
-                    m_name = item.get("module")
-                    if m_name and len(str(m_name)) > 2 and str(m_name).lower() in question:
-                        module_query = m_name
+                    g_name = item.get("assigntogroup") or item.get("module")
+                    if g_name and len(str(g_name)) > 2 and str(g_name).lower() in question:
+                        assigntogroup_query = g_name
                         break
 
             filtered = filter_tickets(
@@ -721,8 +724,8 @@ with tab_chat:
                 client_name=client_name_query,
                 status=status,
                 priority=priority,
-                module=module_query,
-                search_text=None if (ticket_no or priority or status or client_name_query or module_query) else user_question
+                assigntogroup=assigntogroup_query,
+                search_text=None if (ticket_no or priority or status or client_name_query or assigntogroup_query) else user_question
             )
 
             count = len(filtered)
@@ -731,12 +734,13 @@ with tab_chat:
             else:
                 if ticket_no and count == 1:
                     t = filtered[0]
+                    t_id_str = t.get("ticketId") or t.get("ticketNo")
                     answer = (
-                        f"### 🎫 Ticket Details: **{t.get('ticketNo')}**\n\n"
+                        f"### 🎫 Ticket Details: **{t_id_str}**\n\n"
                         f"- **Client**: {t.get('clientName', 'N/A')}\n"
                         f"- **Status**: `{t.get('ticketStatus', 'N/A')}`\n"
                         f"- **Priority**: `{t.get('priority', 'N/A')}`\n"
-                        f"- **Module**: {t.get('module', 'N/A')}\n"
+                        f"- **Assign To Group**: {t.get('assigntogroup') or t.get('module', 'N/A')}\n"
                         f"- **Created By**: {t.get('createdname', 'N/A')} ({t.get('createdEmails', '')})\n"
                         f"- **Created Date**: {t.get('createddate', 'N/A')}\n"
                         f"- **Closed Date**: {t.get('closedondate', 'N/A')}\n"
@@ -753,8 +757,8 @@ with tab_chat:
                         filters_used.append(f"priority **{priority.title()}**")
                     if status:
                         filters_used.append(f"status **{status.title()}**")
-                    if module_query:
-                        filters_used.append(f"module **{module_query}**")
+                    if assigntogroup_query:
+                        filters_used.append(f"group **{assigntogroup_query}**")
 
                     if filters_used:
                         answer = f"Found **{count}** ticket(s) matching " + ", ".join(filters_used) + "."
@@ -783,16 +787,16 @@ with tab_all_tickets:
             try:
                 with st.spinner("Refreshing tickets from /api/Ticket..."):
                     fetch_all_tickets.clear()
-                    st.session_state.tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+                    st.session_state.tickets = fetch_all_tickets(ams_api.email, ams_api.password)
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to refresh tickets: {e}")
 
     # Auto-load if empty
-    if st.session_state.tickets is None and ams_api.username and ams_api.password:
+    if st.session_state.tickets is None and ams_api.email and ams_api.password:
         try:
             with st.spinner("Loading tickets from http://172.16.32.50/api/Ticket..."):
-                st.session_state.tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+                st.session_state.tickets = fetch_all_tickets(ams_api.email, ams_api.password)
         except Exception as e:
             st.warning(f"Could not automatically load tickets: {e}")
 
@@ -805,7 +809,7 @@ with tab_all_tickets:
         unique_clients = ["All"] + sorted(list({str(x["clientName"]) for x in tickets_data if x.get("clientName")}))
         unique_statuses = ["All"] + sorted(list({str(x["ticketStatus"]) for x in tickets_data if x.get("ticketStatus")}))
         unique_priorities = ["All"] + sorted(list({str(x["priority"]) for x in tickets_data if x.get("priority")}))
-        unique_modules = ["All"] + sorted(list({str(x["module"]) for x in tickets_data if x.get("module")}))
+        unique_groups = ["All"] + sorted(list({str(x.get("assigntogroup") or x.get("module")) for x in tickets_data if (x.get("assigntogroup") or x.get("module"))}))
 
         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
         with f_col1:
@@ -815,7 +819,7 @@ with tab_all_tickets:
         with f_col3:
             sel_prio = st.selectbox("Filter Priority", unique_priorities, key="f_prio")
         with f_col4:
-            sel_mod = st.selectbox("Filter Module", unique_modules, key="f_mod")
+            sel_group = st.selectbox("Filter Assign To Group", unique_groups, key="f_group")
 
         with col_t_search:
             t_search = st.text_input("🔍 Search Tickets (Ticket No, Description, Name, Email, Remarks)", placeholder="e.g. Kar2608133, SD, Veera...", key="t_search_box")
@@ -826,7 +830,7 @@ with tab_all_tickets:
             client_name=None if sel_client == "All" else sel_client,
             status=None if sel_status == "All" else sel_status,
             priority=None if sel_prio == "All" else sel_prio,
-            module=None if sel_mod == "All" else sel_mod,
+            assigntogroup=None if sel_group == "All" else sel_group,
             search_text=t_search if t_search else None
         )
 
@@ -849,7 +853,7 @@ with tab_all_tickets:
             df_filtered_all = pd.DataFrame(filtered_all)
 
             column_order = [
-                "ticketNo", "clientName", "ticketStatus", "priority", "module",
+                "ticketNo", "ticketId", "clientName", "ticketStatus", "priority", "assigntogroup",
                 "createdname", "createdEmails", "createddate", "closedondate", "remarks"
             ]
             ordered_cols = [c for c in column_order if c in df_filtered_all.columns] + [c for c in df_filtered_all.columns if c not in column_order]
@@ -889,16 +893,16 @@ with tab_status:
             try:
                 with st.spinner("Refreshing ticket statuses..."):
                     fetch_ticket_statuses.clear()
-                    st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
+                    st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
                 st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
 
     # Auto-load if empty
-    if st.session_state.ticket_statuses is None and ams_api.username and ams_api.password:
+    if st.session_state.ticket_statuses is None and ams_api.email and ams_api.password:
         try:
             with st.spinner("Fetching ticket statuses from AMS API..."):
-                st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
+                st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
         except Exception as e:
             st.warning(f"Could not automatically load ticket statuses. ({e})")
 
@@ -1047,11 +1051,11 @@ with tab_create:
                 value="NO",
                 help="Any additional remarks"
             )
-            module_val = st.selectbox(
-                "Module *",
-                options=MODULES,
-                index=MODULES.index("SAP") if "SAP" in MODULES else 0,
-                help="Select ticket module"
+            assigntogroup_val = st.selectbox(
+                "Assign To Group *",
+                options=GROUPS,
+                index=GROUPS.index("SAP") if "SAP" in GROUPS else 0,
+                help="Select ticket assignment group"
             )
 
         description_val = st.text_area(
@@ -1076,7 +1080,7 @@ with tab_create:
             "descriptionofTicket": description_val.strip() if description_val else None,
             "screenshort": screenshort_val.strip() if screenshort_val else None,
             "remarks": remarks_val.strip() if remarks_val else None,
-            "module": module_val.strip() if module_val else None
+            "assigntogroup": assigntogroup_val.strip() if assigntogroup_val else None
         }
 
         with st.expander("🔍 Preview JSON Request Payload (TicketCreateRequest)"):
@@ -1098,8 +1102,8 @@ with tab_create:
                 try:
                     fetch_all_tickets.clear()
                     fetch_ticket_statuses.clear()
-                    st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.username, ams_api.password)
-                    st.session_state.tickets = fetch_all_tickets(ams_api.username, ams_api.password)
+                    st.session_state.ticket_statuses = fetch_ticket_statuses(ams_api.email, ams_api.password)
+                    st.session_state.tickets = fetch_all_tickets(ams_api.email, ams_api.password)
                 except Exception:
                     pass
 

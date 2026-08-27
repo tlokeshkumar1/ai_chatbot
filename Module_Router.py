@@ -3,7 +3,7 @@ import re
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Complete list of valid assignment groups in AMS
 GROUPS = [
@@ -53,9 +53,10 @@ GROUPS = [
     "SAP SDM",
     "UI / UX"
 ]
-MODULES = GROUPS  # Alias for backward compatibility
 
-# Rule-based fallback domain keywords for assignment groups
+MODULES = GROUPS
+
+# Rule-based fallback domain keywords
 GROUP_KEYWORDS = {
     "SAP-FICO": [r"\bfico\b", r"\bfinance\b", r"\bg/l\b", r"\bgl\b", r"\balert\b", r"\binvoice\b", r"\bpayment\b", r"\bledger\b", r"\basset accounting\b", r"\baccounts payable\b", r"\baccounts receivable\b", r"\btax\b"],
     "SAP-SD": [r"\bsd\b", r"\bsales\b", r"\bdistribution\b", r"\bbilling\b", r"\bshipping\b", r"\bdelivery\b", r"\bpricing\b", r"\bsales order\b"],
@@ -86,7 +87,7 @@ GROUP_KEYWORDS = {
     "Data Analytics & AI": [r"\bdata analytics\b", r"\bmachine learning\b", r"\bml\b", r"\bai\b", r"\bllm\b"],
     "Support": [r"\bsupport\b", r"\bhelpdesk\b", r"\bgeneral\b"]
 }
-MODULE_KEYWORDS = GROUP_KEYWORDS  # Alias for backward compatibility
+MODULE_KEYWORDS = GROUP_KEYWORDS
 
 
 def _classify_with_agent(description: str, api_key: str) -> str:
@@ -130,13 +131,13 @@ def _classify_with_agent(description: str, api_key: str) -> str:
                 text_clean = re.sub(r'[^A-Za-z0-9\s/&\.-]', '', text).strip()
                 
                 # Verify exact or case-insensitive match against valid GROUPS
-                for grp in GROUPS:
-                    if grp.lower() == text_clean.lower():
-                        return grp
+                for mod in GROUPS:
+                    if mod.lower() == text_clean.lower():
+                        return mod
                 # Partial match
-                for grp in GROUPS:
-                    if grp.lower() in text_clean.lower() or text_clean.lower() in grp.lower():
-                        return grp
+                for mod in GROUPS:
+                    if mod.lower() in text_clean.lower() or text_clean.lower() in mod.lower():
+                        return mod
         except Exception as e:
             print(f"Gemini API routing failed with model {model}: {e}")
             continue
@@ -149,10 +150,10 @@ def _classify_with_rules(description: str) -> str:
     desc_lower = description.lower()
     
     # Priority match for specific group keywords
-    for grp, patterns in GROUP_KEYWORDS.items():
+    for mod, patterns in GROUP_KEYWORDS.items():
         for pat in patterns:
             if re.search(pat, desc_lower):
-                return grp
+                return mod
 
     # Generic SAP check
     if "sap" in desc_lower:
@@ -169,6 +170,7 @@ def assign_group(description: str) -> str:
     if not description or not str(description).strip():
         return "Support"
 
+    load_dotenv(override=True)
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if api_key and api_key != "your_gemini_api_key":
         agent_res = _classify_with_agent(description.strip(), api_key)
@@ -179,4 +181,4 @@ def assign_group(description: str) -> str:
 
 
 # Alias for backward compatibility
-assign_module = assign_group
+assign_module = assign_group

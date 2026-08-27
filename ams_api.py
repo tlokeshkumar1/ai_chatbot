@@ -6,35 +6,35 @@ load_dotenv(override=True)
 
 
 class AMSApi:
-    def __init__(self, username=None, password=None):
-        self._username = username
+    def __init__(self, email=None, password=None):
+        self._email = email
         self._password = password
         self._auth_url = None
         self._ticket_url = None
         self._ticket_status_url = None
         self._ticket_create_url = None
         self.token = None
+        self.token_type = "Bearer"
 
     def reload_env(self):
         """Reload variables from .env file into os.environ."""
         load_dotenv(override=True)
 
     @property
-    def username(self):
-        if self._username and self._username != "your_username":
-            return self._username
+    def email(self):
+        if self._email and self._email != "your_email":
+            return self._email
         self.reload_env()
         return (
-            os.getenv("AMS_USERNAME")
-            or os.getenv("AMS_USER")
-            or os.getenv("USERNAME")
+            os.getenv("AMS_EMAIL")
+            or os.getenv("EMAIL")
             or ""
         )
 
-    @username.setter
-    def username(self, value):
-        if self._username != value:
-            self._username = value
+    @email.setter
+    def email(self, value):
+        if self._email != value:
+            self._email = value
             self.token = None
 
     @property
@@ -99,19 +99,19 @@ class AMSApi:
     def ticket_create_url(self, value):
         self._ticket_create_url = value
 
-    def authenticate(self, username=None, password=None):
-        if username is not None:
-            self.username = username
+    def authenticate(self, email=None, password=None):
+        if email is not None:
+            self.email = email
         if password is not None:
             self.password = password
 
-        if not self.username or self.username == "your_username" or not self.password or self.password == "your_password":
+        if not self.email or self.email == "your_email" or not self.password or self.password == "your_password":
             raise Exception(
-                "Invalid credentials configured. Please enter your actual AMS Username and Password in the sidebar or update the .env file."
+                "Invalid credentials configured. Please enter your actual AMS Email and Password in the sidebar or update the .env file."
             )
 
         payload = {
-            "userName": self.username,
+            "email": self.email,
             "password": self.password
         }
     
@@ -135,14 +135,20 @@ class AMSApi:
     
         if response.status_code == 401:
             raise Exception(
-                f"Authentication failed (401 Unauthorized) for user '{self.username}'. Please check your username and password."
+                f"Authentication failed (401 Unauthorized) for email '{self.email}'. Please check your email and password."
             )
         
         response.raise_for_status()
     
         data = response.json()
         token = data.get("token")
-    
+        self.token_type = data.get("tokenType", "Bearer")
+        success = data.get("success")
+        msg = data.get("message")
+        
+        if success is False:
+            raise Exception(f"Authentication failed: {msg or 'Unknown error'}")
+
         if not token:
             raise Exception(
                 f"Token not found in authentication response: {data}"
