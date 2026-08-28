@@ -7,6 +7,7 @@ import re
 from dotenv import load_dotenv
 from ams_api import AMSApi
 from ticket_filter import filter_tickets
+from query_engine import process_ticket_query
 from Module_Router import assign_group, GROUPS, assign_module, MODULES
 
 load_dotenv(override=True)
@@ -328,7 +329,7 @@ with tab_chat:
             r'^(can you|could you|how to|how do i|is it possible to|are you able to|do you|help me)\s+(create|raise|open|log)\s+(a\s+|an\s+|the\s+)?tickets?\??$',
             question
         ))
-
+   
         if is_capability_question and not has_active_draft:
             answer = (
                 "### 🎫 Yes, I can create tickets for you!\n\n"
@@ -661,114 +662,17 @@ with tab_chat:
             count = 0
 
         else:
-            # 1. Regex match for ticket numbers like ICP2608111, Kar2608133, ATG2608209
-            ticket_no = None
-            ticket_match = re.search(r'\b([A-Za-z]{2,8}\d{4,10})\b', user_question)
-            if ticket_match:
-                candidate = ticket_match.group(1).strip()
-                # Look up candidate in pool
-                for item in pool:
-                    t_num = str(item.get("ticketNo", ""))
-                    if t_num.lower() == candidate.lower():
-                        ticket_no = t_num
-                        break
-                if not ticket_no:
-                    ticket_no = candidate
-            else:
-                for item in pool:
-                    t_num = item.get("ticketNo")
-                    if t_num and str(t_num).lower() in question:
-                        ticket_no = t_num
-                        break
-
-            priority = None
-            status = None
-            client_name_query = None
-            assigntogroup_query = None
-
-            # Only apply secondary attribute filters if NOT querying a specific ticket directly
-            if not ticket_no:
-                # 2. Priority match with word boundaries
-                if re.search(r'\b(very high|critical|p1)\b', question):
-                    priority = "Very High (Production Impacted)"
-                elif re.search(r'\b(high|p2)\b', question):
-                    priority = "High (Business Impacted)"
-                elif re.search(r'\b(medium|med|p3)\b', question):
-                    priority = "Medium"
-                elif re.search(r'\b(low|p4)\b', question):
-                    priority = "Low"
-
-                # 3. Status match with word boundaries
-                for s in ["created", "assigned", "in progress", "resolved", "closed"]:
-                    if re.search(r'\b' + re.escape(s) + r'\b', question):
-                        status = s
-                        break
-
-                # 4. Client detection
-                for item in pool:
-                    c_name = item.get("clientName")
-                    if c_name and len(str(c_name)) > 3 and str(c_name).lower() in question:
-                        client_name_query = c_name
-                        break
-
-                # 5. Assign to group detection
-                for item in pool:
-                    g_name = item.get("assigntogroup") or item.get("module")
-                    if g_name and len(str(g_name)) > 2 and str(g_name).lower() in question:
-                        assigntogroup_query = g_name
-                        break
-
-            filtered = filter_tickets(
-                tickets=pool,
-                ticket_no=ticket_no,
-                client_name=client_name_query,
-                status=status,
-                priority=priority,
-                assigntogroup=assigntogroup_query,
-                search_text=None if (ticket_no or priority or status or client_name_query or assigntogroup_query) else user_question
-            )
-
-            count = len(filtered)
-            if not filtered:
-                answer = f"I couldn't find any tickets matching your request (**'{user_question}'**)."
-            else:
-                if ticket_no and count == 1:
-                    t = filtered[0]
-                    t_id_str = t.get("ticketId") or t.get("ticketNo")
-                    answer = (
-                        f"### 🎫 Ticket Details: **{t_id_str}**\n\n"
-                        f"- **Client**: {t.get('clientName', 'N/A')}\n"
-                        f"- **Status**: `{t.get('ticketStatus', 'N/A')}`\n"
-                        f"- **Priority**: `{t.get('priority', 'N/A')}`\n"
-                        f"- **Assign To Group**: {t.get('assigntogroup') or t.get('module', 'N/A')}\n"
-                        f"- **Created By**: {t.get('createdname', 'N/A')} ({t.get('createdEmails', '')})\n"
-                        f"- **Created Date**: {t.get('createddate', 'N/A')}\n"
-                        f"- **Closed Date**: {t.get('closedondate', 'N/A')}\n"
-                        f"- **Remarks**: {t.get('remarks') if t.get('remarks') else 'None'}\n"
-                        f"- **Transaction ID**: `{t.get('txnId', 'N/A')}`"
-                    )
-                else:
-                    filters_used = []
-                    if ticket_no:
-                        filters_used.append(f"ticket **{ticket_no}**")
-                    if client_name_query:
-                        filters_used.append(f"client **{client_name_query}**")
-                    if priority:
-                        filters_used.append(f"priority **{priority.title()}**")
-                    if status:
-                        filters_used.append(f"status **{status.title()}**")
-                    if assigntogroup_query:
-                        filters_used.append(f"group **{assigntogroup_query}**")
-
-                    if filters_used:
-                        answer = f"Found **{count}** ticket(s) matching " + ", ".join(filters_used) + "."
-                    else:
-                        answer = f"Found **{count}** ticket(s) related to your search."
+            with st.spinner("Analyzing ticket database & reasoning..."):
+                answer, filtered = process_ticket_query(
+                    tickets_data=pool,
+                    user_question=user_question,
+                    history=st.session_state.messages
+                )
 
         st.session_state.messages.append({
             "role": "assistant",
             "content": answer,
-            "data": filtered if (filtered and not (ticket_no and count == 1)) else None
+            "data": filtered
         })
         st.rerun()
 
