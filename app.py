@@ -1,16 +1,16 @@
 import os
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 import json
 import re
-from dotenv import load_dotenv
 from ams_api import AMSApi
 from ticket_filter import filter_tickets
 from query_engine import process_ticket_query
 from Module_Router import assign_group, GROUPS, assign_module, MODULES
-
-load_dotenv(override=True)
 
 st.set_page_config(
     page_title="AMS Ticket Management & Assistant",
@@ -361,7 +361,13 @@ with tab_chat:
                 creation_intent = True
                 break
 
-        if not creation_intent and re.search(r'\b(can you|could you|please|how to|how do i)\s+(create|raise|open|log)\s+(a\s+|an\s+|the\s+)?ticket', question):
+        if not creation_intent and re.search(r'\b(can you|could you|please|how to|how do i|want to|need to|like to)\s+(create|raise|open|log|make|generate)\s+(a\s+|an\s+|the\s+)?(ticket|tickate|tikit|tickt|tikket|tikate)', question):
+            creation_intent = True
+
+        if not creation_intent and re.search(r'\b(create|raise|open|log|make|generate|want to create|need a?)\b.*\b(ticket|tickate|tikit|tickt|tikket|tikate)\b', question):
+            creation_intent = True
+
+        if not creation_intent and re.search(r'\b(tickate|tikit|tickt|tikket|tikate)\b', question):
             creation_intent = True
 
         if not creation_intent and (("client:" in question or "client name:" in question) and ("issue:" in question or "desc:" in question or "description:" in question)):

@@ -125,54 +125,43 @@ Always use actual AMS ticket data as the source of truth.
 
 def _call_llm(prompt_text, system_instruction=None, json_response=False):
     """
-    Unified LLM call handler supporting google.genai, google.generativeai, or None.
+    Unified LLM call handler supporting google.genai with model fallback chain.
     """
-    global GENAI_CLIENT, LEGACY_GENAI
+    global GENAI_CLIENT
 
-    # Ensure API Key is set if env variable updated
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-    if not GENAI_CLIENT and api_key:
+    if api_key:
         try:
             from google import genai
-            GENAI_CLIENT = genai.Client(api_key=api_key)
-        except Exception:
-            pass
+            from google.genai import types
 
-    if GENAI_CLIENT:
-        try:
+            if not GENAI_CLIENT:
+                GENAI_CLIENT = genai.Client(api_key=api_key)
+
             config = {}
             if json_response:
                 config["response_mime_type"] = "application/json"
             if system_instruction:
                 config["system_instruction"] = system_instruction
-            
-            # Using gemini-2.5-flash model
-            response = GENAI_CLIENT.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt_text,
-                config=types.GenerateContentConfig(**config) if config else None
-            )
-            return response.text
-        except Exception:
-            pass
 
-    if not LEGACY_GENAI and api_key:
-        try:
-            import google.generativeai as legacy_genai
-            legacy_genai.configure(api_key=api_key)
-            LEGACY_GENAI = legacy_genai
-        except Exception:
-            pass
+            gen_config = types.GenerateContentConfig(**config) if config else None
 
-    if LEGACY_GENAI:
-        try:
-            model = LEGACY_GENAI.GenerativeModel("gemini-1.5-flash")
-            full_prompt = f"{system_instruction}\n\n{prompt_text}" if system_instruction else prompt_text
-            res = model.generate_content(full_prompt)
-            return res.text
-        except Exception:
-            pass
+            # Primary model gemini-2.5-flash, fallback to gemini-3.6-flash
+            for m in ["gemini-2.5-flash", "gemini-3.6-flash"]:
+                try:
+                    response = GENAI_CLIENT.models.generate_content(
+                        model=m,
+                        contents=prompt_text,
+                        config=gen_config
+                    )
+                    if response and response.text:
+                        return response.text
+                except Exception as ex_model:
+                    print(f"[LLM] Model {m} failed: {ex_model}")
+                    continue
+        except Exception as ex:
+            print(f"[LLM] Client error: {ex}")
 
     return None
 
@@ -249,7 +238,7 @@ Analyze the user's question, dataset metadata, and conversation context to produ
 ---
 Generate a valid JSON object matching this exact structure:
 {{
-  "intent": "retrieval" | "filtering" | "counting" | "aggregation" | "ranking" | "comparison" | "trend_analysis" | "distribution" | "semantic_search" | "summarization" | "root_cause_analysis" | "general_inquiry" | "ticket_creation",
+  "intent": "retrieval" | "filtering" | "counting" | "aggregation" | "ranking" | "comparison" | "trend_analysis" | "distribution" | "semantic_search" | "summarization" | "root_cause_analysis" | "general_inquiry" | "greeting" | "ticket_creation",
   "detected_client": string or null,
   "detected_status_semantic": "open" | "unresolved" | "pending" | "closed" | "resolved" | "created" | "all" | null,
   "detected_priority": string or null,
@@ -300,7 +289,61 @@ def heuristic_query_plan(user_question, meta):
     """
     Smart dynamic heuristic parser used as fallback when LLM is unavailable.
     """
-    q_lower = user_question.lower()
+    q_lower = user_question.lower().strip()
+
+    # Greetings & General Inquiries
+    greetings = ["hi", "hello", "hey", "hola", "namaste", "good morning", "good afternoon", "good evening", "greetings", "help", "who are you", "what can you do"]
+    if q_lower in greetings or any(q_lower == g for g in greetings):
+        return {
+            "intent": "greeting",
+            "detected_client": None,
+            "detected_status_semantic": None,
+            "detected_priority": None,
+            "detected_group_or_module": None,
+            "detected_reporter": None,
+            "detected_ticket_no": None,
+            "date_range": {"type": None, "start_date": None, "end_date": None},
+            "semantic_text_search": None,
+            "group_by_field": None,
+            "aggregation": {"function": None, "field": None},
+            "comparison_clients": [],
+            "sort": {"field": None, "direction": None},
+            "limit": None,
+            "ambiguous_client_match": False,
+            "clarification_question": None
+        }
+
+    # Ticket creation detection (including typos like tickate, tikit, etc.)
+    if re.search(r'\b(create|raise|open|log|make|generate|want to create|need a?)\b.*\b(ticket|tickate|tikit|tickt|tikket|tikate)\b', q_lower) or re.search(r'\b(tickate|tikit|tickt|tikket|tikate)\b', q_lower):
+        detected_client = None
+        for c in meta.get("unique_clients", []):
+            if len(c) <= 4:
+                if re.search(r'\b' + re.escape(c) + r'\b', user_question, re.IGNORECASE):
+                    detected_client = c
+                    break
+            else:
+                if c.lower() in q_lower:
+                    detected_client = c
+                    break
+
+        return {
+            "intent": "ticket_creation",
+            "detected_client": detected_client,
+            "detected_status_semantic": None,
+            "detected_priority": None,
+            "detected_group_or_module": None,
+            "detected_reporter": None,
+            "detected_ticket_no": None,
+            "date_range": {"type": None, "start_date": None, "end_date": None},
+            "semantic_text_search": None,
+            "group_by_field": None,
+            "aggregation": {"function": None, "field": None},
+            "comparison_clients": [],
+            "sort": {"field": None, "direction": None},
+            "limit": None,
+            "ambiguous_client_match": False,
+            "clarification_question": None
+        }
 
     # Intent detection
     intent = "filtering"
@@ -490,6 +533,11 @@ def execute_query_plan(tickets_data, plan):
 
     df = pd.DataFrame(tickets_data)
     initial_count = len(df)
+
+    intent = plan.get("intent")
+    if intent in ["greeting", "general_inquiry", "ticket_creation"]:
+        return pd.DataFrame(), {"count": 0, "initial_total": initial_count, "filtered_count": 0}
+
     result = df.copy()
 
     # 1. Filter by specific Ticket Number if present
@@ -692,6 +740,29 @@ Write the natural language response:
     priority = plan.get("detected_priority")
     status_sem = plan.get("detected_status_semantic")
     t_no = plan.get("detected_ticket_no")
+
+    if intent in ["greeting", "general_inquiry"]:
+        return (
+            "👋 **Hello! I'm your Dynamic AMS Ticket Intelligence Assistant.**\n\n"
+            "I can help you dynamically query, search, and manage your AMS tickets. Here is what you can do:\n\n"
+            "- **Search & Filter**: *'Show unresolved P2 tickets for ATG'* or *'Tickets reported this week'*\n"
+            "- **Analyze Metrics**: *'Which client has the most tickets?'* or *'Count of open SAP-MM tickets'*\n"
+            "- **Ticket Details**: Enter any Ticket No (e.g. `ATG2608234` or `Kar2608133`)\n"
+            "- **Create Tickets**: *'Create ticket for Karamtara: SAP login error, priority High'*\n\n"
+            "How can I assist you today?"
+        )
+
+    if intent == "ticket_creation":
+        client_str = f" for **{client}**" if client else ""
+        return (
+            f"### 🎫 Create AMS Ticket{client_str}\n\n"
+            "I can help you create this ticket! Please specify details such as:\n"
+            "- **Client Name** (e.g. `client: Karamtara` or `ATG`)\n"
+            "- **Priority** (`Low`, `Medium`, `High`, `Critical`)\n"
+            "- **Description** (e.g. `issue: SAP login authentication failed`)\n"
+            "- **Reported By** (e.g. `reported by: Jaswanth`)\n\n"
+            "Or reply with the missing fields to complete your ticket draft."
+        )
 
     if t_no and count == 1:
         row = df_filtered.iloc[0]

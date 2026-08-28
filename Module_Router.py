@@ -92,7 +92,7 @@ MODULE_KEYWORDS = GROUP_KEYWORDS
 
 def _classify_with_agent(description: str, api_key: str) -> str:
     """Call Google Gemini API as an AI Agent to classify the ticket description into a valid AMS assignment group."""
-    models = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    models = ["gemini-2.5-flash", "gemini-3.6-flash"]
     groups_str = ", ".join(GROUPS)
     
     prompt = (
