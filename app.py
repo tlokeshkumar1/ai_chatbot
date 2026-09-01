@@ -159,7 +159,18 @@ if "messages" not in st.session_state:
 # Sidebar
 # ---------------------------------------------------------
 with st.sidebar:
-    st.header("⚙️ AMS Configuration")
+    st.markdown(
+        """
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(14, 165, 233, 0.2);">
+            <svg width="28" height="28" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect width="100" height="100" rx="22" fill="#0EA5E9"/>
+                <path d="M28 26 H40 L60 58 V26 H72 V74 H60 L40 42 V74 H28 Z" fill="#FFFFFF"/>
+            </svg>
+            <span style="font-size: 17px; font-weight: 700; letter-spacing: 0.5px;">NEOVATIC</span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     
     load_dotenv(override=True)
     env_email = os.getenv("AMS_EMAIL") or os.getenv("EMAIL") or ""
@@ -232,10 +243,48 @@ with st.sidebar:
             st.rerun()
 
 # ---------------------------------------------------------
-# Header & Navigation
+# Header & Navigation (Neovatic Brand)
 # ---------------------------------------------------------
-st.title("🎫 SAP AMS Ticket Portal")
-st.caption("Complete AMS management: Detailed Tickets, Real-time Status, Ticket Creation, & AI Assistant")
+st.markdown(
+    """
+    <div style="
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        margin-bottom: 20px;
+        background: rgba(14, 165, 233, 0.05);
+        border: 1px solid rgba(14, 165, 233, 0.18);
+        border-radius: 12px;
+        flex-wrap: wrap;
+        gap: 12px;
+    ">
+        <div style="display: flex; align-items: center; gap: 14px;">
+            <svg width="42" height="42" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <linearGradient id="neoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#0284C7"/>
+                        <stop offset="50%" stop-color="#0EA5E9"/>
+                        <stop offset="100%" stop-color="#38BDF8"/>
+                    </linearGradient>
+                </defs>
+                <rect width="100" height="100" rx="22" fill="url(#neoGrad)"/>
+                <path d="M28 26 H40 L60 58 V26 H72 V74 H60 L40 42 V74 H28 Z" fill="#FFFFFF"/>
+            </svg>
+            <div>
+                <div style="font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                    <span>NEOVATIC</span>
+                    <span style="font-size: 14px; font-weight: 500; opacity: 0.65; padding-left: 8px; border-left: 2px solid rgba(14, 165, 233, 0.35);">SAP AMS Portal</span>
+                </div>
+                <div style="font-size: 13px; opacity: 0.75; margin-top: 2px;">
+                    Enterprise Ticket Intelligence &bull; AI Assistant &bull; Real-time AMS Integration
+                </div>
+            </div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 tab_chat, tab_all_tickets, tab_status, tab_create = st.tabs([
     "💬 AI Ticket Assistant",

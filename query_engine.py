@@ -12,7 +12,10 @@ import re
 import warnings
 from datetime import datetime, timedelta, timezone
 import pandas as pd
+import requests
+from dotenv import load_dotenv
 
+load_dotenv(override=True)
 warnings.filterwarnings("ignore")
 
 # Support both new google.genai and deprecated google.generativeai as fallback
@@ -123,15 +126,68 @@ Always use actual AMS ticket data as the source of truth.
 """
 
 
-def _call_llm(prompt_text, system_instruction=None, json_response=False):
+def _call_nvidia(prompt_text, system_instruction=None, json_response=False):
     """
-    Unified LLM call handler supporting google.genai with model fallback chain.
+    Calls NVIDIA API endpoint as the primary model.
+    """
+    load_dotenv(override=True)
+    api_key = os.getenv("NVIDIA_API_KEY")
+    base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    model = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+
+    if not api_key or api_key == "your_nvidia_api_key":
+        return None
+
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    messages = []
+    if system_instruction:
+        sys_msg = system_instruction
+        if json_response:
+            sys_msg += "\n\nCRITICAL: Respond ONLY with a valid JSON object. Do not include markdown code block formatting or additional commentary."
+        messages.append({"role": "system", "content": sys_msg})
+    elif json_response:
+        messages.append({"role": "system", "content": "You are a JSON query engine. Output only a single valid JSON object."})
+
+    messages.append({"role": "user", "content": prompt_text})
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 3072
+    }
+
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=35)
+        if res.ok:
+            data = res.json()
+            if "choices" in data and len(data["choices"]) > 0:
+                msg = data["choices"][0].get("message", {})
+                content = msg.get("content")
+                if content and isinstance(content, str) and content.strip():
+                    return content.strip()
+        else:
+            print(f"[LLM] NVIDIA API returned status {res.status_code}: {res.text}")
+    except Exception as e:
+        print(f"[LLM] NVIDIA API request failed: {e}")
+
+    return None
+
+
+def _call_gemini(prompt_text, system_instruction=None, json_response=False):
+    """
+    Fallback LLM handler using Google Gemini API (gemini-2.5-flash, gemini-3.6-flash).
     """
     global GENAI_CLIENT
-
+    load_dotenv(override=True)
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-    if api_key:
+    if api_key and api_key != "your_gemini_api_key":
         try:
             from google import genai
             from google.genai import types
@@ -147,7 +203,7 @@ def _call_llm(prompt_text, system_instruction=None, json_response=False):
 
             gen_config = types.GenerateContentConfig(**config) if config else None
 
-            # Primary model gemini-2.5-flash, fallback to gemini-3.6-flash
+            # Primary Gemini model gemini-2.5-flash, fallback to gemini-3.6-flash
             for m in ["gemini-2.5-flash", "gemini-3.6-flash"]:
                 try:
                     response = GENAI_CLIENT.models.generate_content(
@@ -158,10 +214,30 @@ def _call_llm(prompt_text, system_instruction=None, json_response=False):
                     if response and response.text:
                         return response.text
                 except Exception as ex_model:
-                    print(f"[LLM] Model {m} failed: {ex_model}")
+                    print(f"[LLM] Gemini Model {m} failed: {ex_model}")
                     continue
         except Exception as ex:
-            print(f"[LLM] Client error: {ex}")
+            print(f"[LLM] Gemini Client error: {ex}")
+
+    return None
+
+
+def _call_llm(prompt_text, system_instruction=None, json_response=False):
+    """
+    Unified LLM call handler:
+    1. Primary: NVIDIA API (nvidia/nemotron-3-super-120b-a12b)
+    2. Fallback: Google Gemini API (gemini-2.5-flash / gemini-3.6-flash)
+    """
+    # 1. Try NVIDIA model as primary
+    nvidia_res = _call_nvidia(prompt_text, system_instruction=system_instruction, json_response=json_response)
+    if nvidia_res:
+        return nvidia_res
+
+    # 2. Fallback to Google Gemini
+    print("[LLM] NVIDIA API unavailable or failed. Falling back to Google Gemini...")
+    gemini_res = _call_gemini(prompt_text, system_instruction=system_instruction, json_response=json_response)
+    if gemini_res:
+        return gemini_res
 
     return None
 
