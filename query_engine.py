@@ -203,8 +203,8 @@ def _call_gemini(prompt_text, system_instruction=None, json_response=False):
 
             gen_config = types.GenerateContentConfig(**config) if config else None
 
-            # Primary Gemini model gemini-2.5-flash, fallback to gemini-3.6-flash
-            for m in ["gemini-2.5-flash", "gemini-3.6-flash"]:
+            # Model cascade for maximum resilience
+            for m in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.6-flash"]:
                 try:
                     response = GENAI_CLIENT.models.generate_content(
                         model=m,
@@ -214,7 +214,6 @@ def _call_gemini(prompt_text, system_instruction=None, json_response=False):
                     if response and response.text:
                         return response.text
                 except Exception as ex_model:
-                    print(f"[LLM] Gemini Model {m} failed: {ex_model}")
                     continue
         except Exception as ex:
             print(f"[LLM] Gemini Client error: {ex}")
@@ -225,19 +224,19 @@ def _call_gemini(prompt_text, system_instruction=None, json_response=False):
 def _call_llm(prompt_text, system_instruction=None, json_response=False):
     """
     Unified LLM call handler:
-    1. Primary: NVIDIA API (nvidia/nemotron-3-super-120b-a12b)
-    2. Fallback: Google Gemini API (gemini-2.5-flash / gemini-3.6-flash)
+    1. Google Gemini API (gemini-2.5-flash / gemini-3.6-flash) when GEMINI_API_KEY is set.
+    2. NVIDIA API when NVIDIA_API_KEY is set.
     """
-    # 1. Try NVIDIA model as primary
-    nvidia_res = _call_nvidia(prompt_text, system_instruction=system_instruction, json_response=json_response)
-    if nvidia_res:
-        return nvidia_res
+    load_dotenv(override=True)
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        gemini_res = _call_gemini(prompt_text, system_instruction=system_instruction, json_response=json_response)
+        if gemini_res:
+            return gemini_res
 
-    # 2. Fallback to Google Gemini
-    print("[LLM] NVIDIA API unavailable or failed. Falling back to Google Gemini...")
-    gemini_res = _call_gemini(prompt_text, system_instruction=system_instruction, json_response=json_response)
-    if gemini_res:
-        return gemini_res
+    if os.getenv("NVIDIA_API_KEY"):
+        nvidia_res = _call_nvidia(prompt_text, system_instruction=system_instruction, json_response=json_response)
+        if nvidia_res:
+            return nvidia_res
 
     return None
 
@@ -281,6 +280,104 @@ def get_dataset_metadata(tickets):
         "unique_priorities": unique_priorities,
         "unique_groups": unique_groups,
         "sample_rows": sample_rows
+    }
+
+
+def parse_chat_intent_with_llm(user_question, meta, active_draft=None, history=None):
+    """
+    Uses LLM to dynamically understand user intent, extract ticket fields, handle draft lifecycle
+    (create, edit, confirm, cancel), or prepare query plans without hardcoded keywords.
+    """
+    history_context = ""
+    if history and len(history) > 0:
+        recent = history[-6:]
+        history_context = "\n".join([f"{msg.get('role', 'user').upper()}: {msg.get('content', '')}" for msg in recent])
+
+    prompt = f"""You are the dynamic NLU & Intent Understanding Engine for the AMS Ticket Assistant.
+Analyze the user's latest message, any ongoing ticket draft, conversation history, and dataset metadata.
+
+### DATASET METADATA:
+- Known Registered Clients: {json.dumps(meta.get('unique_clients', []))}
+- Known Ticket Priorities: ["Low", "Medium", "High (Business Impacted)", "Very High (Production Impacted)"]
+- Known Assignment Groups: {json.dumps(meta.get('unique_groups', [])[:30])}
+
+### ACTIVE PENDING DRAFT (if any):
+{json.dumps(active_draft) if active_draft else "None"}
+
+### RECENT CONVERSATION HISTORY:
+{history_context if history_context else "None"}
+
+### LATEST USER MESSAGE:
+"{user_question}"
+
+---
+Determine the user's intent and extract entities semantically without requiring exact keywords.
+
+Possible Intents:
+1. "ticket_creation": User wants to create/open/raise/log a new ticket, or is providing field values (client, priority, description, reported by) to fill an ongoing draft.
+2. "ticket_confirmation": User is confirming, approving, or asking to submit a completed draft (e.g. "yes", "confirm", "proceed", "looks good", "submit", "go ahead").
+3. "ticket_cancellation": User wants to cancel, discard, or abort an ongoing ticket draft (e.g. "cancel", "reset", "stop", "abort", "discard").
+4. "draft_edit": User wants to change, update, or edit a specific field of the active draft (e.g. "change priority to High", "update client to ATG", "actually the issue is login failure").
+5. "capability_inquiry": User is asking what the bot can do, how to create tickets, or seeking general help.
+6. "greeting": User says hello, hi, good morning, etc.
+7. "ticket_query": User is asking to search, filter, count, compare, aggregate, or look up existing tickets from the database.
+
+---
+Respond with a single JSON object matching this schema:
+{{
+  "intent": "ticket_creation" | "ticket_confirmation" | "ticket_cancellation" | "draft_edit" | "capability_inquiry" | "greeting" | "ticket_query",
+  "extracted_entities": {{
+    "clientName": string or null,
+    "priority": "Low" | "Medium" | "High (Business Impacted)" | "Very High (Production Impacted)" | null,
+    "typeofticket": "Incident" | "Service Request" | "Change Request" | "S PO" | null,
+    "reportedby": string or null,
+    "descriptionofTicket": string or null,
+    "assigntogroup": string or null
+  }},
+  "edit_details": {{
+    "target_field": "clientName" | "priority" | "descriptionofTicket" | "reportedby" | "assigntogroup" | "typeofticket" | null,
+    "new_value": string or null
+  }},
+  "query_plan": {{
+    "intent": "retrieval" | "filtering" | "counting" | "aggregation" | "ranking" | "comparison" | "trend_analysis" | "distribution" | "semantic_search" | "summarization" | "general_inquiry" | null,
+    "detected_client": string or null,
+    "detected_status_semantic": "open" | "unresolved" | "pending" | "closed" | "resolved" | "created" | "all" | null,
+    "detected_priority": string or null,
+    "detected_group_or_module": string or null,
+    "detected_reporter": string or null,
+    "detected_ticket_no": string or null,
+    "semantic_text_search": string or null,
+    "group_by_field": string or null,
+    "aggregation": {{ "function": "count" | "sum", "field": string or null }},
+    "limit": integer or null
+  }},
+  "direct_response": string or null
+}}
+"""
+    raw = _call_llm(prompt, system_instruction=SYSTEM_PROMPT, json_response=True)
+    if raw:
+        try:
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
+                cleaned = re.sub(r"\n?```$", "", cleaned)
+            data = json.loads(cleaned)
+            if isinstance(data, dict) and "intent" in data:
+                return data
+        except Exception:
+            pass
+
+    # Fallback to query plan heuristic
+    q_lower = user_question.lower().strip()
+    if active_draft and q_lower in ["confirm", "yes", "proceed", "submit", "ok", "go ahead"]:
+        return {"intent": "ticket_confirmation", "extracted_entities": {}}
+    if active_draft and q_lower in ["cancel", "reset", "stop", "abort", "discard"]:
+        return {"intent": "ticket_cancellation", "extracted_entities": {}}
+
+    return {
+        "intent": "ticket_query",
+        "extracted_entities": {},
+        "query_plan": heuristic_query_plan(user_question, meta)
     }
 
 
@@ -903,7 +1000,7 @@ def process_ticket_query(tickets_data, user_question, history=None):
     # Step 4: Generate natural language response backed by concrete results
     natural_answer = generate_natural_response(user_question, plan, summary_stats, df_filtered, history=history)
 
-    # Return records as list of dicts for Streamlit table display
+    # Return records as list of dicts for frontend table display
     records_out = df_filtered.to_dict(orient="records") if not df_filtered.empty else None
 
     return natural_answer, records_out
